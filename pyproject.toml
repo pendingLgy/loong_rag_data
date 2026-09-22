@@ -1,0 +1,113 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rag-data"
+dynamic = ["version"]
+description = "历史文本数据导入与向量化管道"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["rag", "vector", "embedding", "milvus"]
+authors = [
+  { name = "loong", email = "amzinglgy@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = [
+  "pydantic>=2.5",
+  "pydantic-settings>=2.1",
+]
+
+[project.optional-dependencies]
+parsers = ["unstructured>=0.12", "spacy>=3.7"]
+embedding = ["sentence-transformers>=2.5"]
+milvus = ["pymilvus>=2.3"]
+qdrant = ["qdrant-client>=1.7"]
+loguru = ["loguru>=0.7"]
+structlog = ["structlog>=24.1"]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "mypy>=1.8",
+  "ruff>=0.1.9",
+]
+
+[project.urls]
+Documentation = "https://github.com/loong/rag-data#readme"
+Issues = "https://github.com/loong/rag-data/issues"
+Source = "https://github.com/loong/rag-data"
+
+[tool.hatch.envs.default]
+features = [
+  "dev",
+]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest"
+types = "mypy src tests"
+check = "ruff check src tests"
+format = "ruff format src tests"
+
+
+[tool.hatch.envs.rag_data_dev]
+features = [
+  "parsers",
+  "embedding",
+  "milvus",
+  "qdrant",
+  "loguru",
+  "structlog",
+  "dev",
+]
+
+[tool.hatch.envs.rag_data_dev.scripts]
+test = "pytest"
+types = "mypy src tests"
+check = "ruff check src tests"
+format = "ruff format src tests"
+
+
+[tool.hatch.version]
+path = "src/rag_data/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_data"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "slow: 需要外部服务的集成测试，默认跳过",
+]
+
+[tool.mypy]
+python_version = "3.8"
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source_pkgs = ["rag_data", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/rag_data/__about__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
