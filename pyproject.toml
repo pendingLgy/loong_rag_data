@@ -85,9 +85,10 @@ packages = ["src/rag_data"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not integration'"
 markers = [
   "slow: 需要外部服务的集成测试，默认跳过",
+  "integration: 真实调用外部服务的手工集成测试，默认跳过",
 ]
 
 [tool.mypy]

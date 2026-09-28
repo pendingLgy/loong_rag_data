@@ -51,7 +51,7 @@ def build_logger(settings: Settings) -> LoggerAdapter:
 
 
 def build_record_class(settings: Settings) -> Type[MemoryRecord]:
-    """流程：解析配置中的记录类路径，支持继承 MemoryRecord 扩展字段。"""
+    """流程：解析配置中的记录类路径；默认 MilvusRecord，可按需继承扩展字段。"""
     return resolve_record_class(settings.models.record_class)
 
 
@@ -65,13 +65,12 @@ def build_store(
     # 后端实现由注册表解析：继承 BaseVectorStore 即自动注册，
     # 因此新增存储方式只需实现类并在配置里写后端名，无需改动本函数。
     cls = record_class if record_class is not None else build_record_class(settings)
-    extra_columns = [dict(item) for item in settings.models.promoted_fields]
+    # 表结构由记录类声明，装配时无需再传入额外的列。
     return create_store(
         settings.storage.backend,
         settings,
         logger,
         record_class=cls,
-        extra_columns=extra_columns,
     )
 
 

@@ -1,17 +1,25 @@
 # Milvus 向量库实现：建表、写入与检索。
 #
-# 表结构由记录类掌握：MemoryRecord.build_collection_schema 硬编码基础字段，
-# 子类可覆盖该方法自定义表结构；配置中的 extra_columns 用于追加提升列。
+# 表结构由记录类掌握：MilvusRecord.build_collection_schema 硬编码基础字段，
+# 子类覆盖该方法即可扩展物理列，本模块不再接收额外的列声明。
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Type
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Type, cast
 
 from rag_data.config import Settings
 from rag_data.exceptions import OptionalDependencyError, SchemaMismatchError, StoreError
 from rag_data.logging.base import LoggerAdapter
-from rag_data.models import MemoryRecord, QueryHit, resolve_record_class
-from rag_data.storage import schema
+from rag_data.models import (
+    BASE_FIELD_NAMES,
+    METADATA_FIELD,
+    PRIMARY_FIELD,
+    VECTOR_FIELD,
+    MilvusRecord,
+    QueryHit,
+    decode_metadata,
+    resolve_record_class,
+)
 from rag_data.storage.base import BaseVectorStore
 
 # metadata JSON 列的字段访问路径模板，供布尔表达式使用。
@@ -25,6 +33,70 @@ OUTPUT_FIELDS: List[str] = ["text_payload", "entities", "created_at"]
 # 检索参数：HNSW 使用 ef，IVFLAT 使用 nprobe。
 HNSW_SEARCH_PARAMS: Dict[str, int] = {"ef": 64}
 IVFLAT_SEARCH_PARAMS: Dict[str, int] = {"nprobe": 16}
+
+
+# 各字段的标量索引类型；未列出的字段不建标量索引。
+SCALAR_INDEX_TYPES: Dict[str, str] = {
+    "entities": "INVERTED",
+    "created_at": "STL_SORT",
+}
+SCALAR_INDEXES: List[str] = list(SCALAR_INDEX_TYPES)
+
+# 各向量索引类型的默认构建参数；未登记的类型不附加参数，由 Milvus 采用自身默认值。
+VECTOR_INDEX_PARAMS: Dict[str, Dict[str, Any]] = {
+    "HNSW": {"M": 16, "efConstruction": 200},
+    "IVFLAT": {"nlist": 1024},
+}
+
+
+class ScalarIndexSpec(NamedTuple):
+    """标量索引声明：字段名与其索引参数。"""
+
+    field_name: str
+    index_params: Dict[str, Any]
+
+
+def is_base_field(name: str) -> bool:
+    """判断字段名是否为记录基类的平铺列。"""
+    return name in BASE_FIELD_NAMES
+
+
+def register_vector_index_params(index_type: str, params: Mapping[str, Any]) -> None:
+    """登记或覆盖某索引类型的默认参数，接入新索引类型无需改动本模块。"""
+    VECTOR_INDEX_PARAMS[index_type] = dict(params)
+
+
+def build_vector_index_params(
+    index_type: str,
+    metric: str,
+    params: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """生成向量索引参数。"""
+
+    # params 显式传入时直接采用；否则取该索引类型的登记默认值；未登记则留空，
+    # 由 Milvus 采用自身默认值。支持哪些索引类型交由 Milvus 判断，本模块不设限制。
+    if params is None:
+        resolved = dict(VECTOR_INDEX_PARAMS.get(index_type, {}))
+    else:
+        resolved = dict(params)
+    return {"index_type": index_type, "metric_type": metric, "params": resolved}
+
+
+def build_scalar_index_specs(
+    field_names_in_collection: Sequence[str],
+    index_types: Optional[Mapping[str, str]] = None,
+) -> List[ScalarIndexSpec]:
+    """按字段名生成标量索引配置。"""
+
+    # index_types 缺省时采用模块内的 SCALAR_INDEX_TYPES；传入可定制或扩展，
+    # 未登记的字段不建标量索引。
+    types = SCALAR_INDEX_TYPES if index_types is None else index_types
+    specs: List[ScalarIndexSpec] = []
+    for name in field_names_in_collection:
+        index_type = types.get(name)
+        if index_type:
+            specs.append(ScalarIndexSpec(field_name=name, index_params={"index_type": index_type}))
+    return specs
 
 
 def import_pymilvus() -> Any:
@@ -62,14 +134,14 @@ def build_filter_expr(
     promoted = set(column_names) if column_names else set()
     clauses: List[str] = []
     for key, value in filters.items():
-        if schema.is_base_field(key) or key in promoted:
+        if is_base_field(key) or key in promoted:
             clauses.append(key + " == " + format_literal(value))
         else:
             clauses.append(METADATA_PATH.format(key) + " == " + format_literal(value))
     return " and ".join(clauses)
 
 
-class MilvusVectorStore(BaseVectorStore):
+class MilvusVectorStore(BaseVectorStore[MilvusRecord]):
     """基于 Milvus 的实现：惰性建连，建表委托给记录类。"""
 
     backend = "milvus"
@@ -78,14 +150,15 @@ class MilvusVectorStore(BaseVectorStore):
         self,
         settings: Settings,
         logger: LoggerAdapter,
-        record_class: Optional[Type[MemoryRecord]] = None,
-        extra_columns: Optional[Sequence[Dict[str, Any]]] = None,
+        record_class: Optional[Type[MilvusRecord]] = None,
         alias: str = DEFAULT_ALIAS,
 ) -> None:
         self._settings = settings
         self._logger = logger
-        self._record_class = record_class or resolve_record_class(settings.models.record_class)
-        self._extra_columns: List[Dict[str, Any]] = [dict(item) for item in (extra_columns or [])]
+        # 未显式传入时按配置解析；cast 仅把基类类型对齐到 MilvusRecord。
+        self._record_class: Type[MilvusRecord] = record_class or cast(
+            Type[MilvusRecord], resolve_record_class(settings.models.record_class)
+        )
         self._alias = alias
         self._collection: Optional[Any] = None
         self._connected = False
@@ -96,25 +169,25 @@ class MilvusVectorStore(BaseVectorStore):
         """返回集合中除 metadata 之外的平铺列名。"""
 
         # 已建表时以集合实际字段为准，可识别记录类覆盖 build_collection_schema
-        # 动态新增的列；未建表时按基类字段与配置提升列推算。
+        # 新增的列；未建表时只有基类字段可知。
         if self._collection is not None:
             fields = getattr(getattr(self._collection, "schema", None), "fields", None) or []
             names = [getattr(field, "name", None) for field in fields]
-            return [name for name in names if name and name != schema.METADATA_FIELD]
-        return list(schema.BASE_COLUMNS) + self.promoted_names()
+            return [name for name in names if name and name != METADATA_FIELD]
+        return list(BASE_FIELD_NAMES)
 
     def promoted_columns(self) -> List[str]:
-        """返回除基类字段外的平铺列名：含记录类覆盖新增与配置提升的列。"""
-        return [name for name in self.column_names() if not schema.is_base_field(name)]
+        """返回除基类字段外的平铺列名，即记录类自行新增的物理列。"""
+        return [name for name in self.column_names() if not is_base_field(name)]
 
     def vector_index_params(self) -> Dict[str, Any]:
         """返回向量索引参数，索引类型与度量取自配置。"""
-        return schema.build_vector_index_params(self._settings.storage.index_type, self._settings.storage.metric)
+        return build_vector_index_params(self._settings.storage.index_type, self._settings.storage.metric)
 
-    def scalar_index_specs(self) -> List[Dict[str, Any]]:
+    def scalar_index_specs(self) -> List[ScalarIndexSpec]:
         """返回标量索引配置。"""
-        names = self.column_names() + [schema.METADATA_FIELD]
-        return schema.build_scalar_index_specs(names)
+        names = self.column_names() + [METADATA_FIELD]
+        return build_scalar_index_specs(names)
 
     def search_params(self) -> Dict[str, Any]:
         """返回检索参数，随索引类型变化。"""
@@ -124,28 +197,24 @@ class MilvusVectorStore(BaseVectorStore):
 
     # ---------------- 映射逻辑（已实现，可单测） ----------------
 
-    def promoted_names(self) -> List[str]:
-        """返回被提升为独立列的扩展字段名。"""
-        return schema.promoted_names(self._extra_columns)
-
-    def record_to_row(self, record: MemoryRecord) -> Dict[str, Any]:
+    def record_to_row(self, record: MilvusRecord) -> Dict[str, Any]:
         """记录转存储行：基类字段与提升列平铺，其余扩展字段序列化进 metadata。"""
-        return schema.to_storage_row(record, self.promoted_columns())
+        return record.to_storage_row(self.promoted_columns())
 
     @staticmethod
     def row_to_hit(row: Dict[str, Any], score: float) -> QueryHit:
         """存储行转检索结果。"""
         return QueryHit(
-            id=row[schema.PRIMARY_FIELD],
+            id=row[PRIMARY_FIELD],
             text_payload=row["text_payload"],
             score=score,
             entities=list(row.get("entities", [])),
             created_at=row["created_at"],
         )
 
-    def row_to_record(self, row: Dict[str, Any]) -> MemoryRecord:
+    def row_to_record(self, row: Dict[str, Any]) -> MilvusRecord:
         """存储行还原为记录，扩展字段完整回填至配置的记录类。"""
-        return schema.from_storage_row(row, self._record_class, self.promoted_columns())
+        return self._record_class.from_storage_row(row, self.promoted_columns())
 
     @staticmethod
     def normalize_score(distance: float, metric: str) -> float:
@@ -166,11 +235,21 @@ class MilvusVectorStore(BaseVectorStore):
         if self._connected:
             return pymilvus
         try:
-            pymilvus.connections.connect(alias=self._alias, uri=self._settings.storage.milvus_uri)
+            # db_name 为连接级参数，集合的读写都落在该库中。
+            pymilvus.connections.connect(
+                alias=self._alias,
+                uri=self._settings.storage.milvus_uri,
+                db_name=self._settings.storage.milvus_db,
+            )
         except Exception as exc:  # noqa: BLE001 连接失败统一转领域异常
             raise StoreError("Milvus 连接失败：" + str(exc)) from exc
         self._connected = True
-        self._logger.info("Milvus 连接建立", uri=self._settings.storage.milvus_uri, alias=self._alias)
+        self._logger.info(
+            "Milvus 连接建立",
+            uri=self._settings.storage.milvus_uri,
+            db=self._settings.storage.milvus_db,
+            alias=self._alias,
+        )
         return pymilvus
 
     def _has_collection(self, pymilvus: Any) -> bool:
@@ -178,47 +257,20 @@ class MilvusVectorStore(BaseVectorStore):
         return bool(pymilvus.utility.has_collection(self._settings.storage.collection_name, using=self._alias))
 
     def _build_collection_schema(self, pymilvus: Any) -> Any:
-        """建表委托给记录类；默认使用 MemoryRecord 声明的字段。"""
+        """建表完全委托给记录类；扩展列由记录类自行声明。"""
 
-        # 继承 MemoryRecord 的类可覆盖 build_collection_schema 自定义表结构；
-        # 配置中声明的提升列在此追加为独立物理列。
-        collection_schema = self._record_class.build_collection_schema(
+        # 继承 MilvusRecord 的类覆盖 build_collection_schema 即可扩展表结构，
+        # 新增的物理列随后由 column_names 从实际集合 schema 读出。
+        return self._record_class.build_collection_schema(
             pymilvus, self._settings.storage.vector_dim
         )
-        if self._extra_columns:
-            fields = list(getattr(collection_schema, "fields", []) or [])
-            for column in self._extra_columns:
-                fields.append(self._promote_field(pymilvus, column))
-            collection_schema.fields = fields
-        return collection_schema
-
-    @staticmethod
-    def _promote_field(pymilvus: Any, column: Dict[str, Any]) -> Any:
-        """将配置声明的提升列转为 FieldSchema，仅支持标量类型。"""
-        data_type = pymilvus.DataType
-        field_type = column.get("type")
-        kwargs: Dict[str, Any] = {}
-        if field_type == "VARCHAR":
-            dtype = data_type.VARCHAR
-            kwargs["max_length"] = int(column.get("max_length", 65535))
-        elif field_type == "INT64":
-            dtype = data_type.INT64
-        elif field_type == "DOUBLE":
-            dtype = data_type.DOUBLE
-        elif field_type == "BOOL":
-            dtype = data_type.BOOL
-        elif field_type == "JSON":
-            dtype = data_type.JSON
-        else:
-            raise SchemaMismatchError("不支持的提升列类型：" + str(field_type))
-        return pymilvus.FieldSchema(name=column["name"], dtype=dtype, **kwargs)
 
     def _verify_vector_dim(self, collection: Any) -> None:
         """校验既有集合的向量维度与配置一致。"""
         expected = self._settings.storage.vector_dim
         fields = getattr(getattr(collection, "schema", None), "fields", None) or []
         for field in fields:
-            if getattr(field, "name", None) != schema.VECTOR_FIELD:
+            if getattr(field, "name", None) != VECTOR_FIELD:
                 continue
             params = getattr(field, "params", {}) or {}
             dim = params.get("dim") if hasattr(params, "get") else None
@@ -228,15 +280,14 @@ class MilvusVectorStore(BaseVectorStore):
     def _create_collection(self, pymilvus: Any, name: str) -> Any:
         """建表、建索引，返回集合实例。"""
         collection = pymilvus.Collection(name=name, schema=self._build_collection_schema(pymilvus), using=self._alias)
-        collection.create_index(field_name=schema.VECTOR_FIELD, index_params=self.vector_index_params())
+        collection.create_index(field_name=VECTOR_FIELD, index_params=self.vector_index_params())
         for spec in self.scalar_index_specs():
-            collection.create_index(field_name=spec["field_name"], index_params=spec["index_params"])
+            collection.create_index(field_name=spec.field_name, index_params=spec.index_params)
         self._logger.info(
             "Milvus 集合创建完成",
             collection=name,
             record_class=self._record_class.__name__,
             columns=self.column_names(),
-            promoted=[item["name"] for item in self._extra_columns],
         )
         return collection
 
@@ -266,7 +317,7 @@ class MilvusVectorStore(BaseVectorStore):
     def _to_milvus_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """将存储行的 metadata 由 JSON 文本转为字典，符合 Milvus JSON 列的写入要求。"""
         converted = dict(row)
-        converted[schema.METADATA_FIELD] = schema.decode_metadata(row.get(schema.METADATA_FIELD))
+        converted[METADATA_FIELD] = decode_metadata(row.get(METADATA_FIELD))
         return converted
 
     def _rows_to_columns(self, rows: Sequence[Dict[str, Any]]) -> Dict[str, List[Any]]:
@@ -277,14 +328,14 @@ class MilvusVectorStore(BaseVectorStore):
                 columns.setdefault(key, []).append(value)
         return columns
 
-    def _validate_rows(self, records: Sequence[MemoryRecord]) -> None:
+    def _validate_rows(self, records: Sequence[MilvusRecord]) -> None:
         """校验每条记录的向量维度与配置一致。"""
         expected = self._settings.storage.vector_dim
         for record in records:
             if len(record.vector) != expected:
                 raise SchemaMismatchError("向量维度不一致：记录为 " + str(len(record.vector)) + "，配置为 " + str(expected))
 
-    def upsert(self, records: List[MemoryRecord]) -> int:
+    def upsert(self, records: List[MilvusRecord]) -> int:
         """按主键幂等写入，分批提交，返回写入条数。"""
         if not records:
             return 0
@@ -318,7 +369,7 @@ class MilvusVectorStore(BaseVectorStore):
         try:
             results = collection.search(
                 data=[list(vector)],
-                anns_field=schema.VECTOR_FIELD,
+                anns_field=VECTOR_FIELD,
                 param=self.search_params(),
                 limit=top_n,
                 expr=expr or None,
@@ -335,7 +386,7 @@ class MilvusVectorStore(BaseVectorStore):
         for result in results or []:
             for item in result:
                 entity = dict(getattr(item, "entity", {}) or {})
-                entity[schema.PRIMARY_FIELD] = getattr(item, "id")
+                entity[PRIMARY_FIELD] = getattr(item, "id")
                 score = self.normalize_score(float(getattr(item, "distance", 0.0)), metric)
                 hits.append(self.row_to_hit(entity, score))
         hits.sort(key=lambda hit: hit.score, reverse=True)

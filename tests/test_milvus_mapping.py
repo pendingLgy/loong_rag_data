@@ -8,14 +8,19 @@ import pytest
 
 from rag_data.config import Settings
 from rag_data.exceptions import OptionalDependencyError, SchemaMismatchError
-from rag_data.models import MemoryRecord
-from rag_data.storage import schema
+from rag_data.models import BASE_FIELD_NAMES, METADATA_FIELD, VECTOR_FIELD, MilvusRecord, decode_metadata
 from rag_data.storage.milvus_store import (
     METADATA_PATH,
+    SCALAR_INDEXES,
+    VECTOR_INDEX_PARAMS,
     MilvusVectorStore,
+    ScalarIndexSpec,
     build_filter_expr,
+    build_scalar_index_specs,
+    build_vector_index_params,
     format_literal,
     import_pymilvus,
+    register_vector_index_params,
 )
 
 QUOTE = chr(34)
@@ -52,7 +57,7 @@ def _record(**overrides):
         "created_at": 1.0,
     }
     base.update(overrides)
-    return MemoryRecord(**base)
+    return MilvusRecord(**base)
 
 
 def _settings(**overrides):
@@ -124,12 +129,12 @@ def test_build_filter_expr_combines_clauses():
 
 def test_record_to_row_matches_schema():
     row = _store().record_to_row(_record(user_id="u1"))
-    assert set(row) == set(schema.field_names())
+    assert set(row) == set(MilvusRecord.storage_fields())
 
 
 def test_record_to_row_puts_extras_in_metadata():
     row = _store().record_to_row(_record(user_id="u1"))
-    assert schema.decode_metadata(row[schema.METADATA_FIELD]) == {"user_id": "u1"}
+    assert decode_metadata(row[METADATA_FIELD]) == {"user_id": "u1"}
 
 
 def test_row_to_record_restores_extras():
@@ -167,10 +172,36 @@ class _FakeDataType:
 
 
 class _FakeFieldSchema:
+    """假 FieldSchema，构造时复现真实 Milvus 的必要参数校验。"""
+
+    # 真实服务会拒绝缺少必要参数的 schema；若此处不校验，缺陷会一直漏到
+    # 集成测试才暴露，故在构造期即按 Milvus 规则拦截。
+
     def __init__(self, name, dtype, description="", **kwargs):
         self.name = name
         self.dtype = dtype
         self.params = dict(kwargs)
+        self._require_type_params()
+
+    def _require_type_params(self):
+        data_type = _FakeDataType
+        if self.dtype == data_type.VARCHAR:
+            self._require("max_length")
+        elif self.dtype == data_type.FLOAT_VECTOR:
+            self._require("dim")
+        elif self.dtype == data_type.ARRAY:
+            # ARRAY 需要元素个数上限；元素为 VARCHAR 时还需元素级最大长度。
+            self._require("max_capacity")
+            if self.params.get("element_type") == data_type.VARCHAR:
+                self._require("max_length")
+
+    def _require(self, param):
+        if param in self.params:
+            return
+        raise ValueError(
+            "type param(" + param + ") should be specified for the field("
+            + self.name + "): missing parameter"
+        )
 
 
 class _FakeCollectionSchema:
@@ -218,8 +249,8 @@ class _FakeConnections:
         self.connected = []
         self.disconnected = []
 
-    def connect(self, alias=None, uri=None):
-        self.connected.append((alias, uri))
+    def connect(self, alias=None, uri=None, db_name=None):
+        self.connected.append((alias, uri, db_name))
 
     def disconnect(self, alias=None):
         self.disconnected.append(alias)
@@ -240,8 +271,8 @@ def _install_fake_pymilvus(monkeypatch, existing=None):
 # ---------- 表结构（建表委托给记录类） ----------
 
 
-class _ExtendedRecord(MemoryRecord):
-    """子类通过覆盖 build_collection_schema 扩展表结构。"""
+class _ExtendedRecord(MilvusRecord):
+    """Milvus 记录子类通过覆盖 build_collection_schema 扩展表结构。"""
 
     user_id: str
 
@@ -254,7 +285,7 @@ class _ExtendedRecord(MemoryRecord):
         return collection_schema
 
 
-def test_build_collection_schema_uses_memory_record_fields(monkeypatch):
+def test_build_collection_schema_uses_milvus_record_fields(monkeypatch):
     module = _install_fake_pymilvus(monkeypatch)
     collection_schema = _store()._build_collection_schema(module)
     names = [field.name for field in collection_schema.fields]
@@ -276,6 +307,9 @@ def test_build_collection_schema_marks_array_element_type(monkeypatch):
     by_name = {field.name: field for field in collection_schema.fields}
     assert by_name["entities"].dtype == module.DataType.ARRAY
     assert by_name["entities"].params["element_type"] == module.DataType.VARCHAR
+    # ARRAY 的两项必要参数：元素个数上限与元素级最大长度
+    assert by_name["entities"].params["max_capacity"] == 64
+    assert by_name["entities"].params["max_length"] == 256
 
 
 def test_subclass_override_extends_collection_schema(monkeypatch):
@@ -286,24 +320,9 @@ def test_subclass_override_extends_collection_schema(monkeypatch):
     assert names == ["id", "text_payload", "vector", "entities", "created_at", "metadata", "user_id"]
 
 
-def test_extra_columns_are_promoted_to_physical_columns(monkeypatch):
-    module = _install_fake_pymilvus(monkeypatch)
-    store = _store(extra_columns=[{"name": "user_id", "type": "VARCHAR", "max_length": 128}])
-    assert "user_id" in store.column_names()
-    collection_schema = store._build_collection_schema(module)
-    by_name = {field.name: field for field in collection_schema.fields}
-    assert by_name["user_id"].params["max_length"] == 128
-
-
-def test_column_names_exclude_metadata_and_keep_base_order():
-    store = _store(extra_columns=[{"name": "tags", "type": "VARCHAR"}])
-    assert store.column_names() == schema.BASE_COLUMNS + ["tags"]
-
-
-def test_promote_field_rejects_unknown_type(monkeypatch):
-    module = _install_fake_pymilvus(monkeypatch)
-    with pytest.raises(SchemaMismatchError):
-        MilvusVectorStore._promote_field(module, {"name": "broken", "type": "UNKNOWN"})
+def test_column_names_exclude_metadata_before_create():
+    # 未建表时只有基类字段可知，metadata 不计入；扩展列需建表后从集合 schema 读取。
+    assert _store().column_names() == list(BASE_FIELD_NAMES)
 
 
 def test_vector_index_params_follow_settings():
@@ -314,8 +333,8 @@ def test_vector_index_params_follow_settings():
 
 
 def test_scalar_index_specs_cover_entities_and_created_at():
-    names = [spec["field_name"] for spec in _store().scalar_index_specs()]
-    assert names == schema.SCALAR_INDEXES
+    names = [spec.field_name for spec in _store().scalar_index_specs()]
+    assert names == SCALAR_INDEXES
 
 
 # ---------- 建表 ----------
@@ -328,10 +347,19 @@ def test_ensure_collection_creates_table_and_indexes(monkeypatch):
     collection = store._collection
     assert collection is not None and collection.loaded
     indexed = [name for name, _ in collection.indexes]
-    assert schema.VECTOR_FIELD in indexed
-    for name in schema.SCALAR_INDEXES:
+    assert VECTOR_FIELD in indexed
+    for name in SCALAR_INDEXES:
         assert name in indexed
     assert module.connections.connected
+
+def test_connect_passes_db_name_from_settings(monkeypatch):
+    """建连时带上配置的库名，集合读写才落在目标库。"""
+    module = _install_fake_pymilvus(monkeypatch)
+    store = _store(_settings(storage={"milvus_db": "rag_data_test"}))
+    store.ensure_collection()
+    _, uri, db_name = module.connections.connected[0]
+    assert db_name == "rag_data_test"
+    assert uri == store._settings.storage.milvus_uri
 
 
 def test_created_field_schema_marks_primary_key(monkeypatch):
@@ -346,7 +374,7 @@ def test_created_field_schema_marks_primary_key(monkeypatch):
 
 def test_ensure_collection_is_idempotent_when_exists(monkeypatch):
     _install_fake_pymilvus(monkeypatch, existing={"test_coll"})
-    store = _store(extra_columns=[{"name": "user_id", "type": "VARCHAR"}])
+    store = _store()
     store.ensure_collection()
     assert store._collection.loaded
     assert store._collection.indexes == []
@@ -395,11 +423,56 @@ def test_upsert_flattens_column_added_by_subclass(monkeypatch):
     store.upsert([record])
     columns = store._collection.upserted[0]
     assert columns["user_id"][0] == "u1"
-    assert columns[schema.METADATA_FIELD][0] == {}
+    assert columns[METADATA_FIELD][0] == {}
 
 
-def test_column_names_include_promoted_before_create(monkeypatch):
-    _install_fake_pymilvus(monkeypatch)
-    store = _store(extra_columns=[{"name": "user_id", "type": "VARCHAR"}])
-    assert store.column_names() == schema.BASE_COLUMNS + ["user_id"]
-    assert store.promoted_columns() == ["user_id"]
+# ---------- 索引参数（Milvus 专有，随实现存放） ----------
+
+
+def test_build_scalar_index_specs_default():
+    specs = build_scalar_index_specs(["id", "entities", "created_at"])
+    assert [spec.field_name for spec in specs] == ["entities", "created_at"]
+    assert [spec.index_params for spec in specs] == [
+        {"index_type": "INVERTED"},
+        {"index_type": "STL_SORT"},
+    ]
+
+
+def test_scalar_index_spec_is_named_tuple():
+    spec = ScalarIndexSpec("entities", {"index_type": "INVERTED"})
+    name, params = spec
+    assert (name, params) == ("entities", {"index_type": "INVERTED"})
+    assert isinstance(spec, tuple)
+    with pytest.raises(AttributeError):
+        spec.field_name = "other"
+
+
+def test_build_vector_index_params_defaults_and_returns_copy():
+    params = build_vector_index_params("HNSW", "COSINE")
+    assert params["index_type"] == "HNSW"
+    assert params["params"]["M"] == 16
+    params["params"]["M"] = 0
+    assert VECTOR_INDEX_PARAMS["HNSW"]["M"] == 16
+
+
+def test_build_vector_index_params_accepts_unknown_type():
+    assert build_vector_index_params("IVF_PQ", "COSINE")["params"] == {}
+
+
+def test_build_vector_index_params_accepts_explicit_params():
+    assert build_vector_index_params("HNSW", "L2", {"M": 32})["params"] == {"M": 32}
+
+
+def test_register_vector_index_params_extends_table():
+    original = dict(VECTOR_INDEX_PARAMS)
+    try:
+        register_vector_index_params("SCANN", {"nlist": 128})
+        assert build_vector_index_params("SCANN", "COSINE")["params"] == {"nlist": 128}
+    finally:
+        VECTOR_INDEX_PARAMS.clear()
+        VECTOR_INDEX_PARAMS.update(original)
+
+
+def test_build_scalar_index_specs_accepts_custom_types():
+    specs = build_scalar_index_specs(["id", "user_id"], {"user_id": "INVERTED"})
+    assert [spec.field_name for spec in specs] == ["user_id"]

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, List, Protocol, Tuple, Type
+import json
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple, Type
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -18,8 +19,31 @@ BASE_FIELD_NAMES: Tuple[str, ...] = (
     "created_at",
 )
 
+# 存储行中的列名常量：主键、向量列与扩展字段容器。
+PRIMARY_FIELD = "id"
+VECTOR_FIELD = "vector"
+METADATA_FIELD = "metadata"
+
+
+def encode_metadata(extras: Dict[str, Any]) -> str:
+    """将扩展字段序列化为 JSON 文本；存储行中的 metadata 为文本形态。"""
+    return json.dumps(extras, ensure_ascii=False, sort_keys=True)
+
+
+def decode_metadata(raw: Any) -> Dict[str, Any]:
+    """将 metadata 还原为字典，兼容字符串、字节与已解析的字典。"""
+    if not raw:
+        return {}
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 # 默认记录类的点分路径；可通过配置 models.record_class 覆盖。
-DEFAULT_RECORD_CLASS_PATH = "rag_data.models.MemoryRecord"
+# 默认指向 MilvusRecord：它继承 MemoryRecord，并额外掌握 Milvus 建表。
+DEFAULT_RECORD_CLASS_PATH = "rag_data.models.MilvusRecord"
 
 class MilvusDataType(Protocol):
     """pymilvus.DataType 的结构约束；其成员为整型枚举值。"""
@@ -75,7 +99,11 @@ class DocumentChunk(BaseModel):
 
 
 class MemoryRecord(BaseModel):
-    """写入向量库的最终形态，可作为基类被继承以扩展字段。"""
+    """记忆记录的基础数据模型，供内存实现与通用场景使用。
+
+    只描述字段与校验，不含任何存储后端专有的建表逻辑；需要 Milvus
+    建表能力时改用 MilvusRecord。
+    """
 
     # extra 设为 allow，使其可继承、可扩展：
     # 1. 子类可声明类型化字段，例如 user_id、tags，随记录一并存储
@@ -111,13 +139,65 @@ class MemoryRecord(BaseModel):
         return self.model_dump()
 
     @classmethod
+    def storage_fields(cls) -> List[str]:
+        """返回存储行的平铺列：基类字段加扩展字段容器 metadata。"""
+        return list(BASE_FIELD_NAMES) + [METADATA_FIELD]
+
+    @staticmethod
+    def storage_columns(promoted: Optional[Sequence[str]] = None) -> List[str]:
+        """返回落库的平铺列：基类字段加提升列，与基类字段重名的提升列不重复计入。"""
+        extra = [name for name in (promoted or ()) if name not in BASE_FIELD_NAMES]
+        return list(BASE_FIELD_NAMES) + extra
+
+    def metadata_fields(self, promoted: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """返回需写入 metadata 的扩展字段；已提升为独立列的字段不再重复入库。"""
+        skip = set(BASE_FIELD_NAMES) | set(promoted or ())
+        return {key: value for key, value in self.model_dump().items() if key not in skip}
+
+    def to_storage_row(self, promoted: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """本记录到存储行：基类字段与提升列平铺，其余扩展字段序列化进 metadata。"""
+        payload = self.model_dump()
+        row: Dict[str, Any] = {name: payload[name] for name in self.storage_columns(promoted) if name in payload}
+        row[METADATA_FIELD] = encode_metadata(self.metadata_fields(promoted))
+        return row
+
+    @classmethod
+    def from_storage_row(cls, row: Dict[str, Any], promoted: Optional[Sequence[str]] = None) -> "MemoryRecord":
+        """存储行到记录：提升列与 metadata 一并还原为扩展字段。"""
+        data: Dict[str, Any] = {name: row[name] for name in cls.storage_columns(promoted) if name in row}
+        data.update(decode_metadata(row.get(METADATA_FIELD)))
+        return cls(**data)
+
+    @classmethod
+    def flatten_row(cls, row: Dict[str, Any], promoted: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """将存储行摊平为单层字典，便于按字段过滤。"""
+        merged: Dict[str, Any] = {name: row[name] for name in cls.storage_columns(promoted) if name in row}
+        merged.update(decode_metadata(row.get(METADATA_FIELD)))
+        return merged
+
+    @classmethod
+    def row_matches(cls, row: Dict[str, Any], filters: Dict[str, Any], promoted: Optional[Sequence[str]] = None) -> bool:
+        """在存储行上做字段精确匹配，涵盖基类字段、提升列与扩展字段。"""
+        if not filters:
+            return True
+        merged = cls.flatten_row(row, promoted)
+        return all(merged.get(key) == value for key, value in filters.items())
+
+
+class MilvusRecord(MemoryRecord):
+    """Milvus 记录模型：在基础字段之上掌握集合表结构的生成。
+
+    建表权归属本类，子类覆盖 build_collection_schema 即可扩展或替换表结构。
+    """
+
+    @classmethod
     def build_collection_schema(
         cls, pymilvus: MilvusModule, vector_dim: int
     ) -> MilvusCollectionSchema:
-        """按 MemoryRecord 声明的字段硬编码创建集合表结构。"""
+        """按声明的字段创建集合表结构。"""
 
         # 子类可覆盖本方法以扩展或替换表结构，示例：
-        #   class TenantRecord(MemoryRecord):
+        #   class TenantRecord(MilvusRecord):
         #       user_id: str
         #
         #       @classmethod
@@ -138,11 +218,14 @@ class MemoryRecord(BaseModel):
             ),
             pymilvus.FieldSchema(name="text_payload", dtype=data_type.VARCHAR, max_length=65535),
             pymilvus.FieldSchema(name="vector", dtype=data_type.FLOAT_VECTOR, dim=int(vector_dim)),
+            # ARRAY 除元素个数外，元素为 VARCHAR 时还须声明元素最大长度，
+            # 否则 Milvus 报 type param(max_length) should be specified。
             pymilvus.FieldSchema(
                 name="entities",
                 dtype=data_type.ARRAY,
                 element_type=data_type.VARCHAR,
                 max_capacity=64,
+                max_length=256,
             ),
             pymilvus.FieldSchema(name="created_at", dtype=data_type.DOUBLE),
             pymilvus.FieldSchema(name="metadata", dtype=data_type.JSON),

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, Generic, List, Optional, TypeVar
 
 from rag_data.models import MemoryRecord, QueryHit
 from rag_data.storage.registry import register_store
 
+# 存储实现按自己处理的记录类型参数化：内存后端用 MemoryRecord，
+# Milvus 后端用 MilvusRecord，两者共享同一套接口。
+RecordT = TypeVar("RecordT", bound=MemoryRecord)
 
-class BaseVectorStore(ABC):
-    """向量库的统一接口。"""
+
+class BaseVectorStore(ABC, Generic[RecordT]):
+    """向量库的统一接口，按记录类型参数化。"""
 
     # 配置中 storage.backend 的取值；子类置为该名字即自动注册。
     backend: ClassVar[Optional[str]] = None
@@ -28,7 +32,7 @@ class BaseVectorStore(ABC):
         """确保集合与索引存在，重复调用需幂等。"""
 
     @abstractmethod
-    def upsert(self, records: List[MemoryRecord]) -> int:
+    def upsert(self, records: List[RecordT]) -> int:
         """按 id 幂等写入，返回写入条数；扩展字段一并落库。"""
 
     @abstractmethod

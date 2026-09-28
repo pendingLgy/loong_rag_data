@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Type
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,6 +56,9 @@ class StorageSettings(BaseModel):
     # 内置 memory 与 milvus，可用 rag_data.available_backends() 查看。
     backend: str = Field(default="memory")
     milvus_uri: str = Field(default="localhost:19530")
+    # 目标数据库名。Milvus 支持多库隔离，需与 collection_name 所在库一致；
+    # 默认库名为 default，可用自定义库隔离不同项目的数据。
+    milvus_db: str = Field(default="default")
     collection_name: str = Field(default="memory_store")
     vector_dim: int = Field(default=1024, gt=0)
     metric: Literal["COSINE", "L2", "IP"] = "COSINE"
@@ -67,7 +70,8 @@ class ModelSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # 记录类的点分路径。继承 MemoryRecord 扩展字段后，把类路径填在这里即可切换；
+    # 记录类的点分路径。默认 MilvusRecord（含 Milvus 建表）；继承它或 MemoryRecord
+    # 扩展字段后，把类路径填在这里即可切换；
     # 写入与读回都会使用该类，因此扩展字段可完整往返。
     record_class: str = Field(default=DEFAULT_RECORD_CLASS_PATH)
     # 需要提升为独立物理列的扩展字段，形如
@@ -93,7 +97,7 @@ class EmbeddingSettings(BaseModel):
     # provider 名对应嵌入模型注册表中的键；继承 BaseEmbeddingProvider 即自动注册，
     # 内置 openai 与 qwen，可用 rag_data.available_embedding_providers() 查看。
     provider: str = Field(default="openai")
-    # 模型名。留空时用 provider 的默认模型，如 openai 为 text-embedding-3-small、qwen 为 text-embedding-v3。
+    # 模型名。留空时用 provider 的默认模型，见各 provider 的 default_model。
     model: str = Field(default="")
     batch_size: int = Field(default=128, gt=0)
     # 期望输出维度，0 表示用 provider 默认维度；需与 storage.vector_dim 对齐。
@@ -121,6 +125,18 @@ class LoggingSettings(BaseModel):
     backend: Literal["stdlib", "loguru", "structlog", "auto"] = "auto"
     level: str = Field(default="INFO")
     json_output: bool = Field(default=False, alias="json")
+
+
+# 分区名到分区模型的映射。
+# 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
+SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
+    SECTION_STORAGE: StorageSettings,
+    SECTION_MODELS: ModelSettings,
+    SECTION_CHUNKING: ChunkingSettings,
+    SECTION_EMBEDDING: EmbeddingSettings,
+    SECTION_NLP: NLPSettings,
+    SECTION_LOGGING: LoggingSettings,
+}
 
 
 class Settings(BaseSettings):
@@ -165,10 +181,12 @@ class Settings(BaseSettings):
         layered = _merge_sections(env_data, hardcoded)
         layered = _merge_sections(layered, overrides)
         if use_env:
-            # 环境变量源（含 .env）交由 pydantic-settings 处理，init 实参优先级更高。
+            # 环境变量作为基线，未指定的字段由 pydantic-settings 从环境与 .env 补齐。
             return cls(**layered)
-        # 关闭环境变量时绕过环境变量源，结果只取决于显式配置。
-        return cls.model_validate(layered)
+        # 关闭环境变量：先用各分区默认值补齐每个字段，再整体作为构造实参传入。
+        # 显式实参在 pydantic-settings 中优先级最高，环境变量因此无从渗入；
+        # 不依赖 model_validate 是否绕过环境源这一版本相关行为。
+        return cls(**_with_defaults(layered))
 
 
 def load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
@@ -212,6 +230,19 @@ def _merge_sections(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> Di
         else:
             merged[name] = value
     return merged
+
+
+def _with_defaults(layered: Mapping[str, Any]) -> Dict[str, Any]:
+    """用各分区默认值补齐字段，使构造实参覆盖全部字段，从而屏蔽环境变量。"""
+    filled: Dict[str, Any] = {}
+    for name, model in SECTION_MODEL_CLASSES.items():
+        # 分区模型是纯 pydantic 模型，不读取环境；by_alias 保证键名与配置一致。
+        section: Dict[str, Any] = dict(model().model_dump(by_alias=True))
+        override = layered.get(name)
+        if isinstance(override, Mapping):
+            section.update(override)
+        filled[name] = section
+    return filled
 
 
 def _assign_nested(data: Dict[str, Any], parts: List[str], value: Any) -> None:

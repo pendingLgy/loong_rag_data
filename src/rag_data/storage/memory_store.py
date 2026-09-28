@@ -8,8 +8,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Type
 
-from rag_data.models import MemoryRecord, QueryHit
-from rag_data.storage import schema
+from rag_data.models import PRIMARY_FIELD, VECTOR_FIELD, MemoryRecord, QueryHit
 from rag_data.storage.base import BaseVectorStore
 
 
@@ -27,7 +26,7 @@ def cosine_similarity(left: List[float], right: List[float]) -> float:
     return max(0.0, min(1.0, (raw + 1.0) / 2.0))
 
 
-class InMemoryVectorStore(BaseVectorStore):
+class InMemoryVectorStore(BaseVectorStore[MemoryRecord]):
     """以字典保存存储行的内存实现。"""
 
     backend = "memory"
@@ -46,7 +45,7 @@ class InMemoryVectorStore(BaseVectorStore):
         self._record_class = record_class
         # 与 Milvus 实现保持一致：提升列作为平铺列存储，其余扩展字段进 metadata。
         self._extra_columns = [dict(item) for item in (extra_columns or [])]
-        self._promoted = schema.promoted_names(self._extra_columns)
+        self._promoted = [str(item["name"]) for item in self._extra_columns if item.get("name")]
         self._rows: Dict[str, Dict[str, Any]] = {}
 
     def ensure_collection(self) -> None:
@@ -55,7 +54,7 @@ class InMemoryVectorStore(BaseVectorStore):
     def upsert(self, records: List[MemoryRecord]) -> int:
         """记录转为存储行后写入，扩展字段落入 metadata 列。"""
         for record in records:
-            self._rows[record.id] = schema.to_storage_row(record, self._promoted)
+            self._rows[record.id] = record.to_storage_row(self._promoted)
         return len(records)
 
     def query(
@@ -66,13 +65,13 @@ class InMemoryVectorStore(BaseVectorStore):
 ) -> List[QueryHit]:
         hits: List[QueryHit] = []
         for row in self._rows.values():
-            if not schema.row_matches(row, filters or {}, self._promoted):
+            if not self._record_class.row_matches(row, filters or {}, self._promoted):
                 continue
             hits.append(
                 QueryHit(
-                    id=row[schema.PRIMARY_FIELD],
+                    id=row[PRIMARY_FIELD],
                     text_payload=row["text_payload"],
-                    score=cosine_similarity(vector, row[schema.VECTOR_FIELD]),
+                    score=cosine_similarity(vector, row[VECTOR_FIELD]),
                     entities=list(row.get("entities", [])),
                     created_at=row["created_at"],
                 )
@@ -83,7 +82,7 @@ class InMemoryVectorStore(BaseVectorStore):
     def get_record(self, record_id: str) -> Optional[MemoryRecord]:
         """按主键取回记录，验证扩展字段可完整往返。"""
         row = self._rows.get(record_id)
-        return schema.from_storage_row(row, self._record_class, self._promoted) if row is not None else None
+        return self._record_class.from_storage_row(row, self._promoted) if row is not None else None
 
     def get_row(self, record_id: str) -> Optional[Dict[str, Any]]:
         """按主键取回原始存储行，便于断言落库形态。"""

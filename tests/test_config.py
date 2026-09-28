@@ -154,9 +154,24 @@ def test_load_env_is_lower_than_code_override(monkeypatch):
 def test_load_use_env_false_ignores_environment(monkeypatch):
     monkeypatch.setenv("RAG_STORAGE__BACKEND", "milvus")
     monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
+    monkeypatch.setenv("RAG_LOGGING__LEVEL", "DEBUG")
+
+    # 对照：默认读取环境变量，证明环境确实生效
+    from_env = Settings.load()
+    assert from_env.storage.backend == "milvus"
+    assert from_env.storage.vector_dim == 256
+    assert from_env.logging.level == "DEBUG"
+
+    # use_env=False 时忽略环境变量，字段回落到默认值
     config = Settings.load(use_env=False)
     assert config.storage.backend == "memory"
     assert config.storage.vector_dim == 1024
+    assert config.logging.level == "INFO"
+
+    # 关闭环境变量只影响环境来源，显式给出的配置照常生效
+    hardcoded = Settings.load(use_env=False, storage={"vector_dim": 512})
+    assert hardcoded.storage.vector_dim == 512
+    assert hardcoded.storage.backend == "memory"
 
 
 def test_load_ignores_unrelated_env_prefix(monkeypatch):

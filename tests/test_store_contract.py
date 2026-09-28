@@ -1,14 +1,13 @@
 # BaseVectorStore 接口契约测试，使用内存实现。
 #
-# 内存实现与 Milvus 实现共用同一套存储行编解码，因此这里同时覆盖
+# 存储行编解码由记录类自身提供，这里同时覆盖
 # 扩展字段能否真正落库与还原。
 
 import json
 
 import pytest
 
-from rag_data.models import MemoryRecord
-from rag_data.storage import schema
+from rag_data.models import METADATA_FIELD, PRIMARY_FIELD, MemoryRecord
 from rag_data.storage.base import BaseVectorStore
 from rag_data.storage.memory_store import InMemoryVectorStore, cosine_similarity
 
@@ -84,16 +83,16 @@ def test_row_layout_matches_schema():
     store = InMemoryVectorStore()
     store.upsert([_record("m1", [1.0, 0.0], user_id="u1")])
     row = store.get_row("m1")
-    assert set(row) == set(schema.field_names())
-    assert row[schema.PRIMARY_FIELD] == "m1"
-    assert isinstance(row[schema.METADATA_FIELD], str)
+    assert set(row) == set(MemoryRecord.storage_fields())
+    assert row[PRIMARY_FIELD] == "m1"
+    assert isinstance(row[METADATA_FIELD], str)
 
 
 def test_extra_fields_are_persisted_and_restored():
     store = InMemoryVectorStore()
     store.upsert([_record("m1", [1.0, 0.0], user_id="u1", tags=["a"])])
     row = store.get_row("m1")
-    assert json.loads(row[schema.METADATA_FIELD]) == {"user_id": "u1", "tags": ["a"]}
+    assert json.loads(row[METADATA_FIELD]) == {"user_id": "u1", "tags": ["a"]}
     restored = store.get_record("m1")
     assert restored is not None
     assert restored.extra_fields == {"user_id": "u1", "tags": ["a"]}
@@ -102,7 +101,7 @@ def test_extra_fields_are_persisted_and_restored():
 def test_record_without_extras_has_empty_metadata():
     store = InMemoryVectorStore()
     store.upsert([_record("m1", [1.0, 0.0])])
-    assert store.get_row("m1")[schema.METADATA_FIELD] == "{}"
+    assert store.get_row("m1")[METADATA_FIELD] == "{}"
 
 
 def test_get_record_missing_returns_none():

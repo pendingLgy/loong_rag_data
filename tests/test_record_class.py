@@ -11,6 +11,7 @@ from rag_data import (
     DEFAULT_RECORD_CLASS_PATH,
     InMemoryVectorStore,
     MemoryRecord,
+    MilvusRecord,
     RagData,
     Settings,
     build_record_class,
@@ -20,7 +21,7 @@ from rag_data import (
 from rag_data.config import ModelSettings
 from rag_data.exceptions import ConfigError
 from rag_data.ingestion.pipeline import IngestionPipeline
-from rag_data.storage import schema
+from rag_data.models import METADATA_FIELD
 
 CUSTOM_TEMPLATE = textwrap.dedent(chr(10).join([
     "from typing import List",
@@ -70,7 +71,7 @@ def test_model_settings_rejects_unknown_field():
 
 
 def test_resolve_default_class():
-    assert resolve_record_class(DEFAULT_RECORD_CLASS_PATH) is MemoryRecord
+    assert resolve_record_class(DEFAULT_RECORD_CLASS_PATH) is MilvusRecord
 
 
 def test_resolve_custom_subclass(tmp_path):
@@ -145,7 +146,7 @@ def test_pipeline_writes_custom_class(tmp_path, logger):
     written = pipeline.run([path], user_id="tenant-a")
     assert written > 0
     row = next(iter(store._rows.values()))
-    assert json.loads(row[schema.METADATA_FIELD])["user_id"] == "tenant-a"
+    assert json.loads(row[METADATA_FIELD])["user_id"] == "tenant-a"
 
 
 def test_facade_exposes_record_class(tmp_path, settings=None):

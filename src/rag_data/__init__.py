@@ -69,6 +69,7 @@ from rag_data.models import (
     MilvusDataType,
     MilvusFieldSchema,
     MilvusModule,
+    MilvusRecord,
     QueryHit,
     resolve_record_class,
 )
@@ -117,6 +118,7 @@ __all__ = [
     # 数据模型
     "DocumentChunk",
     "MemoryRecord",
+    "MilvusRecord",
     "MilvusModule",
     "MilvusCollectionSchema",
     "MilvusFieldSchema",

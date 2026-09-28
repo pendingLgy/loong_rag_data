@@ -153,7 +153,7 @@ from rag_data import Settings, IngestionPipeline, InMemoryVectorStore
 | :--- | :--- |
 | 版本 | __version__ |
 | 配置 | Settings、StorageSettings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
-| 数据模型 | DocumentChunk、MemoryRecord、QueryHit、resolve_record_class、DEFAULT_RECORD_CLASS_PATH |
+| 数据模型 | DocumentChunk、MemoryRecord、MilvusRecord、QueryHit、resolve_record_class、DEFAULT_RECORD_CLASS_PATH |
 | 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 存储 | BaseVectorStore、InMemoryVectorStore、register_store、register_backend、available_backends、is_registered、resolve_store、create_store |
@@ -237,7 +237,7 @@ available_backends()   # ["memory", "milvus"]
 ### 切换后端：只改配置
 
 ```json
-{ "storage": { "backend": "milvus", "milvus_uri": "localhost:19530" } }
+{ "storage": { "backend": "milvus", "milvus_uri": "localhost:19530", "milvus_db": "default" } }
 ```
 
 ```python
@@ -261,7 +261,7 @@ from rag_data import BaseVectorStore
 class SqliteVectorStore(BaseVectorStore):
     backend = "sqlite"          # 声明后端名，类定义时自动注册
 
-    def __init__(self, settings=None, logger=None, record_class=None, extra_columns=None):
+    def __init__(self, settings=None, logger=None, record_class=None):
         ...
 
     def ensure_collection(self) -> None: ...
@@ -294,7 +294,7 @@ class AnotherStore(BaseVectorStore):
 注册表统一以关键字传入 settings 与 logger，自定义实现请保持一致签名：
 
 ```python
-def __init__(self, settings=None, logger=None, record_class=None, extra_columns=None): ...
+def __init__(self, settings=None, logger=None, record_class=None): ...
 ```
 
 | 参数 | 含义 |
@@ -302,7 +302,6 @@ def __init__(self, settings=None, logger=None, record_class=None, extra_columns=
 | settings | 已校验的配置对象 |
 | logger | LoggerAdapter 实例 |
 | record_class | 记录类，由 models.record_class 解析 |
-| extra_columns | 需提升为独立列的扩展字段 |
 
 未注册的后端名会抛 ConfigError，并在信息中列出当前可用后端。
 
@@ -317,7 +316,7 @@ def __init__(self, settings=None, logger=None, record_class=None, extra_columns=
 | provider | 实现 | 默认模型 | 默认维度 | API Key 环境变量 |
 | :--- | :--- | :--- | :--- | :--- |
 | openai | OpenAIEmbeddingProvider | text-embedding-3-small | 1536 | OPENAI_API_KEY |
-| qwen | QwenEmbeddingProvider | text-embedding-v3 | 1024 | DASHSCOPE_API_KEY |
+| qwen | QwenEmbeddingProvider | qwen3.7-text-embedding | 1024 | DASHSCOPE_API_KEY |
 
 qwen 复用 OpenAI 的请求格式（DashScope 兼容模式），差异仅在默认模型、接口地址、
 API Key 环境变量与单次批量上限（10 条）。
@@ -331,7 +330,7 @@ available_embedding_providers()   # ["openai", "qwen"]
 ### 切换 provider：只改配置
 
 ```json
-{ "embedding": { "provider": "qwen", "model": "text-embedding-v3" } }
+{ "embedding": { "provider": "qwen", "model": "qwen3.7-text-embedding" } }
 ```
 
 ```python
@@ -347,7 +346,7 @@ app = RagData.create(overrides={
 
 ```bash
 RAG_EMBEDDING__PROVIDER=qwen
-RAG_EMBEDDING__MODEL=text-embedding-v3
+RAG_EMBEDDING__MODEL=qwen3.7-text-embedding
 DASHSCOPE_API_KEY=sk-xxx
 RAG_STORAGE__VECTOR_DIM=1024
 ```
@@ -415,29 +414,29 @@ embedder = Embedder(settings, logger, model=my_model)
 
 ## Milvus 建表
 
-建表权由**记录类**掌握：MemoryRecord 默认硬编码基础字段，子类覆盖即可自定义表结构。
-Milvus 的建表调用委托给记录类的 build_collection_schema。
+建表权由**记录类**掌握：Milvus 后端使用 MilvusRecord，它默认硬编码基础字段，子类覆盖即可自定义表结构。
+Milvus 的建表调用委托给记录类的 build_collection_schema；MemoryRecord 只描述数据，不含建表逻辑。
 
-### 默认表结构（MemoryRecord 硬编码）
+### 默认表结构（MilvusRecord 硬编码）
 
 | 字段 | 类型 | 参数 | 索引 |
 | :--- | :--- | :--- | :--- |
 | id | VARCHAR | max_length=64, is_primary | Primary Key |
 | text_payload | VARCHAR | max_length=65535 | - |
 | vector | FLOAT_VECTOR | dim 取自 storage.vector_dim | HNSW + COSINE |
-| entities | ARRAY | element_type=VARCHAR, max_capacity=64 | INVERTED |
+| entities | ARRAY | element_type=VARCHAR, max_capacity=64, max_length=256 | INVERTED |
 | created_at | DOUBLE | - | STL_SORT |
 | metadata | JSON | - | -（扩展字段容器）|
 
 ### 覆盖建表：子类自定义表结构
 
-继承 MemoryRecord 并覆盖 build_collection_schema，即可追加或替换字段：
+继承 MilvusRecord 并覆盖 build_collection_schema，即可追加或替换字段：
 
 ```python
-from rag_data import MemoryRecord
+from rag_data import MilvusRecord
 
 
-class TenantRecord(MemoryRecord):
+class TenantRecord(MilvusRecord):
     user_id: str
 
     @classmethod
@@ -501,7 +500,8 @@ app.init_collection()      # 建表、建索引并 load；重复调用幂等
 
 ## 数据模型与扩展
 
-MemoryRecord 是写入向量库的记录模型，基类字段精简，并支持继承与运行时扩展。
+MemoryRecord 是基础数据模型，供内存实现与通用场景使用；MilvusRecord 继承它并额外掌握 Milvus 建表，
+是配置的默认记录类。两者字段一致，都支持继承与运行时扩展。
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -518,10 +518,10 @@ MemoryRecord 是写入向量库的记录模型，基类字段精简，并支持�
 ```python
 from typing import List
 
-from rag_data import MemoryRecord
+from rag_data import MilvusRecord
 
 
-class TenantRecord(MemoryRecord):
+class TenantRecord(MilvusRecord):
     user_id: str
     tags: List[str] = []
 
@@ -545,7 +545,7 @@ record = TenantRecord(
 RAG_MODELS__RECORD_CLASS=myapp.models.TenantRecord
 ```
 
-未配置时默认使用 rag_data.models.MemoryRecord，行为与之前一致。
+未配置时默认使用 rag_data.models.MilvusRecord；它继承 MemoryRecord，内存后端同样适用。
 
 扩展方式二：直接传入未声明字段，无需定义子类。
 
@@ -564,11 +564,10 @@ record.to_row()       # 含全部字段的扁平字典，供存储层落库
 扩展字段如何落库：
 
 记录写入前会先转成存储行 —— 基类字段平铺成列，扩展字段序列化进 metadata JSON 列。
-内存实现与 Milvus 实现共用同一套编解码（storage/schema.py），因此落库行为一致。
+存储行编解码由记录类自身提供（MemoryRecord 定义，MilvusRecord 继承），两个后端因此共享同一套落库行为。
 
 ```python
 from rag_data import MemoryRecord
-from rag_data.storage import schema
 from rag_data.storage.memory_store import InMemoryVectorStore
 
 store = InMemoryVectorStore()
@@ -592,16 +591,15 @@ store.query(vector, top_n=5, filters={"user_id": "u1"})
 # Milvus 布尔表达式：metadata[\"user_id\"] == \"u1\"
 ```
 
-编解码 API（storage/schema.py）：
+编解码 API（记录类方法，MemoryRecord 定义，MilvusRecord 继承）：
 
-| 函数 | 作用 |
+| 方法 | 作用 |
 | :--- | :--- |
-| to_storage_row(record) | 记录到存储行，扩展字段进 metadata |
-| from_storage_row(row) | 存储行还原为记录，扩展字段回填 |
-| flatten_row(row) | 存储行摊平为单层字典 |
-| row_matches(row, filters) | 按字段匹配，涵盖基类与扩展字段 |
-| metadata_fields(record) | 仅提取扩展字段 |
-
+| record.to_storage_row(promoted) | 记录到存储行，扩展字段进 metadata |
+| Cls.from_storage_row(row, promoted) | 存储行还原为记录，扩展字段回填 |
+| Cls.flatten_row(row, promoted) | 存储行摊平为单层字典 |
+| Cls.row_matches(row, filters, promoted) | 按字段匹配，涵盖基类与扩展字段 |
+| Cls.storage_fields() | 存储行平铺列名，含 metadata |
 
 
 ## 配置
@@ -622,7 +620,7 @@ store.query(vector, top_n=5, filters={"user_id": "u1"})
 
 | 分区 | 主要字段 |
 | :--- | :--- |
-| storage | backend、milvus_uri、collection_name、vector_dim、metric、index_type |
+| storage | backend、milvus_uri、milvus_db、collection_name、vector_dim、metric、index_type |
 | models | record_class、promoted_fields |
 | chunking | max_chars、overlap_sents |
 | embedding | model、batch_size |
@@ -636,7 +634,7 @@ from rag_data.config import Settings
 
 settings = Settings()                     # 默认读取环境变量（含 .env）
 settings = Settings.load()                # 同上，显式表达按环境变量加载
-settings = Settings.load(use_env=False)   # 忽略环境变量，仅取字段默认值
+settings = Settings.load(use_env=False)   # 忽略环境变量：仅用字段默认值，硬编码仍生效
 ```
 
 ### 代码硬编码
@@ -724,5 +722,99 @@ uv venv
 uv pip install -e ".[dev]"
 uv run pytest
 ```
+
+### 集成测试
+
+单元测试不访问外部服务；调用真实嵌入模型与向量库的用例集中在 tests/test_integration_qwen_milvus.py，
+标记为 integration，默认不执行，需人工准备凭据与服务后显式触发。
+
+覆盖链路：Qwen 嵌入、Milvus 建表、写入、检索、过滤、幂等。
+
+#### 前置条件
+
+| 依赖 | 说明 |
+| :--- | :--- |
+| pymilvus | 向量库客户端，随可选依赖安装 |
+| API Key | Qwen（DashScope）的 API Key |
+| Milvus 服务 | 可访问的实例，本地容器或云端均可 |
+
+#### 环境变量
+
+| 变量 | 必填 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| DASHSCOPE_API_KEY | 是 | 无 | Qwen 的 API Key |
+| RAG_IT_API_KEY | 否 | 无 | 覆盖上一项，便于切换多套凭据 |
+| RAG_IT_MILVUS_URI | 否 | http://127.0.0.1:19530 | Milvus 地址 |
+| RAG_IT_COLLECTION | 否 | rag_data_it_qwen | 集合名 |
+| RAG_IT_MODEL | 否 | qwen3.7-text-embedding | 嵌入模型 |
+| RAG_IT_KEEP | 否 | 空 | 置 1 则跑完保留集合，默认删除 |
+| RAG_IT_DIM | 否 | 1024 | 向量维度，需与模型输出一致 |
+
+凭据只在运行时通过环境变量提供，代码与仓库中不落任何密钥。
+
+#### 执行命令
+
+Windows PowerShell：
+
+```powershell
+uv pip install -e ".[dev,milvus]"
+
+$env:DASHSCOPE_API_KEY = "sk-xxx"
+$env:RAG_IT_MILVUS_URI = "http://127.0.0.1:19530"
+
+uv run pytest -m integration -v -s
+```
+
+macOS 或 Linux：
+
+```bash
+uv pip install -e ".[dev,milvus]"
+
+export DASHSCOPE_API_KEY=sk-xxx
+export RAG_IT_MILVUS_URI=http://127.0.0.1:19530
+
+uv run pytest -m integration -v -s
+```
+
+使用 hatch：
+
+```bash
+# 默认环境（需已装 pymilvus）
+hatch run test -m integration -v -s
+
+# 开发环境（叠加全部可选依赖，含 pymilvus）
+hatch run rag_data_dev:test -m integration -v -s
+```
+
+只跑单条用例：
+
+```bash
+uv run pytest -m integration -v -s tests/test_integration_qwen_milvus.py::test_query_returns_most_relevant_first
+```
+
+不加 -m integration 时这些用例会被自动排除，见 pyproject.toml 中 addopts 的 -m not integration；
+因此日常执行 pytest 不会触发任何外部调用。
+
+#### 用例清单
+
+| 用例 | 验证内容 |
+| :--- | :--- |
+| test_provider_is_qwen | provider 为 qwen，模型与维度取自配置 |
+| test_encode_returns_configured_dimension | 编码结果维度等于 vector_dim |
+| test_related_text_is_more_similar | 语义相近文本得分高于无关文本 |
+| test_ingest_writes_chunks | 导入写入条数大于 0 |
+| test_query_returns_most_relevant_first | 结果降序、分数落在 0 到 1、首条命中关键词 |
+| test_filter_isolates_tenant | 按 user_id 过滤只取本租户数据，走 metadata 的 JSON 路径 |
+| test_hit_fields_are_complete | 命中字段完整且类型正确 |
+| test_reingest_is_idempotent | 同文档重复导入不产生重复记录 |
+
+#### 集合清理
+
+用例结束后自动删除本次使用的集合，但只在同时满足以下条件时执行：
+
+1. 集合名以 rag_data_it 开头
+2. 未设置 RAG_IT_KEEP=1
+
+因此不会误删他人数据。若想跑完后保留集合以检查数据，设置 RAG_IT_KEEP=1。
 
 详细设计见 plan/DEVELOPMENT_PLAN.md。

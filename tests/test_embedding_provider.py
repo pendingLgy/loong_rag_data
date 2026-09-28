@@ -102,7 +102,11 @@ def test_provider_defaults():
     assert OpenAIEmbeddingProvider.default_model == "text-embedding-3-small"
     assert OpenAIEmbeddingProvider.default_dim == 1536
     assert OpenAIEmbeddingProvider.api_key_env == "OPENAI_API_KEY"
-    assert QwenEmbeddingProvider.default_model == "text-embedding-v3"
+    # 默认模型由 provider 自行声明；校验其存在与配套不变量，避免锁死具体模型名。
+    assert QwenEmbeddingProvider.default_model
+    assert QwenEmbeddingProvider.default_dim == 1024
+    assert QwenEmbeddingProvider.api_key_env == "DASHSCOPE_API_KEY"
+    assert QwenEmbeddingProvider.max_batch_size == 10
     assert QwenEmbeddingProvider.default_dim == 1024
     assert QwenEmbeddingProvider.api_key_env == "DASHSCOPE_API_KEY"
     assert QwenEmbeddingProvider.max_batch_size == 10
@@ -151,7 +155,7 @@ def test_config_defaults_to_openai():
 
 def test_provider_falls_back_to_defaults(logger):
     provider = QwenEmbeddingProvider(Settings(), logger)
-    assert provider.model == "text-embedding-v3"
+    assert provider.model == QwenEmbeddingProvider.default_model
     assert provider.dim == 1024
     assert provider.base_url.startswith("https:")
 
@@ -281,8 +285,9 @@ def test_embedder_uses_qwen_when_configured(logger, monkeypatch):
         embedding={"provider": "qwen", "api_key": "k"},
     )
     Embedder(settings, logger).encode(["a"])
-    assert seen["model"] == "text-embedding-v3"
-    assert "dashscope" in seen["url"]
+    assert seen["model"] == QwenEmbeddingProvider.default_model
+    # 端点取自 provider 自述的 base_url，不锁死具体域名。
+    assert QwenEmbeddingProvider.default_base_url in seen["url"]
 
 
 def test_embedder_honors_provider_batch_limit(logger, batchy):

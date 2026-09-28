@@ -107,7 +107,6 @@ rag-data
 │     │  └─ embedder.py      Embedding 封装
 │     ├─ storage             向量库
 │     │  ├─ base.py          BaseVectorStore 接口
-│     │  ├─ schema.py        Schema 声明与存储行编解码
 │     │  └─ milvus_store.py  Milvus 实现（建表、写入、检索）
 │     └─ logging             日志适配层
 │        ├─ base.py          LoggerAdapter 抽象
@@ -122,7 +121,7 @@ rag-data
    ├─ test_chunking.py
    ├─ test_entities.py
    ├─ test_embedder.py
-   ├─ test_schema.py
+   ├─ test_storage_row.py
    ├─ test_store_contract.py
    ├─ test_pipeline.py
    ├─ test_public_api.py
@@ -154,7 +153,7 @@ rag-data
 
 任务：
 
-- models.py：以 pydantic BaseModel 定义 DocumentChunk、MemoryRecord、QueryHit
+- models.py：以 pydantic BaseModel 定义 DocumentChunk、MemoryRecord、MilvusRecord、QueryHit
 - 为关键字段加约束：text 非空、vector 维度校验、score 取值 0 到 1
 - config.py：以 pydantic-settings BaseSettings 定义 Settings，按模块分区，含 env_prefix、嵌套分隔符、.env 加载
 - 对互相约束的字段使用 model_validator，对单字段使用 field_validator
@@ -196,14 +195,14 @@ rag-data
 
 任务：
 
-- schema.py 定义字段：id、text_payload、vector、entities、created_at、metadata
-- 定义索引：主键、标量索引（entities、created_at）、向量索引 HNSW、度量 COSINE
-- 提供存储行编解码：记录与行之间的双向映射，扩展字段进 metadata
-- 提供建表所需生成器：字段定义、向量索引参数、标量索引配置
+- 记录类定义字段：id、text_payload、vector、entities、created_at、metadata
+- models.MilvusRecord 声明建表字段；milvus_store 定义索引：主键、标量索引（entities、created_at）、向量索引 HNSW、度量 COSINE
+- 记录类提供存储行编解码：记录与行之间的双向映射，扩展字段进 metadata
+- milvus_store 提供建表生成器：向量索引参数、标量索引配置
 - base.py 抽象接口：ensure_collection、upsert、query
 - milvus_store.py 实现，建表前用 Settings.vector_dim 与模型维度做校验
 
-交付：schema.py、base.py、milvus_store.py
+交付：models.py、base.py、milvus_store.py
 验收：本地 Milvus 可建表并写入读取；接口用内存 Fake 实现做契约测试
 
 ### M5 向量化模块与导入管道（2 人天）
@@ -244,8 +243,9 @@ rag-data
 ## 5. 关键接口契约
 
 - config.Settings：pydantic-settings 的 BaseSettings，按模块分区，实例化即完成校验
-- models.DocumentChunk、models.MemoryRecord、models.QueryHit：pydantic BaseModel
-- models.MemoryRecord：extra 允许，支持子类声明扩展字段或运行时传入，通过 extra_fields 与 to_row 暴露
+- models.DocumentChunk、models.MemoryRecord、models.MilvusRecord、models.QueryHit：pydantic BaseModel
+- models.MemoryRecord：基础数据模型，extra 允许，支持子类扩展或运行时传入，通过 extra_fields 与 to_row 暴露
+- models.MilvusRecord：继承 MemoryRecord，补充 build_collection_schema（Milvus 建表）
 - models.resolve_record_class（path）返回 MemoryRecord 的子类；非法路径抛 ConfigError
 - logging.factory.configure_logging（settings）返回 LoggerAdapter
 - logging.factory.get_logger（name）返回 LoggerAdapter
@@ -254,7 +254,7 @@ rag-data
 - ingestion.chunking.build_semantic_chunks（text，max_chars 默认 250，overlap_sents 默认 1，nlp 可选，logger 可选）返回切块列表
 - ingestion.entities.extract_entities（text，nlp 可选）返回实体列表
 - embedding.embedder.Embedder.encode（texts）返回向量列表
-- storage.schema：to_storage_row、from_storage_row、flatten_row、row_matches、build_collection_fields
+- 记录类方法：to_storage_row、from_storage_row、flatten_row、row_matches
 - storage.base.BaseVectorStore：ensure_collection、upsert（records）、query（vector，top_n，filters 可选）
 - ingestion.pipeline.IngestionPipeline：ingest_file（path，user_id 可选）、run（paths，user_id 可选）返回写入条数
 - facade.RagData：init_collection、ingest、ingest_file、query、close，支持上下文管理
@@ -268,11 +268,12 @@ rag-data
 | :--- | :--- | :--- | :--- |
 | storage | backend | memory | 存储后端名，对应注册表键；继承 BaseVectorStore 即自动注册 |
 | storage | milvus_uri | localhost:19530 | Milvus 服务地址 |
+| storage | milvus_db | default | 目标数据库名，集合须在该库中 |
 | storage | collection_name | memory_store | 集合名 |
 | storage | vector_dim | 1024 | 向量维度，建表前校验 |
 | storage | metric | COSINE | 距离度量 |
 | storage | index_type | HNSW | 向量索引类型 |
-| models | record_class | rag_data.models.MemoryRecord | 记录类点分路径，切换自定义扩展 |
+| models | record_class | rag_data.models.MilvusRecord | 记录类点分路径，切换自定义扩展 |
 | models | promoted_fields | 空列表 | 需提升为独立列的扩展字段，形如 name、type、max_length |
 | chunking | max_chars | 250 | 切块字符上限，区间 150 至 300 |
 | chunking | overlap_sents | 1 | 切块重叠句数 |
@@ -384,6 +385,13 @@ class MemoryRecord(BaseModel):
     def to_row(self) -> Dict[str, Any]: ...
 
 
+class MilvusRecord(MemoryRecord):
+    """在基础字段之上掌握 Milvus 集合表结构的生成。"""
+
+    @classmethod
+    def build_collection_schema(cls, pymilvus: MilvusModule, vector_dim: int) -> MilvusCollectionSchema: ...
+
+
 class QueryHit(BaseModel):
     id: str = Field(min_length=1)
     text_payload: str = Field(min_length=1)
@@ -396,14 +404,15 @@ class QueryHit(BaseModel):
 
 | 模型 | 字段 |
 | :--- | :--- |
-| MemoryRecord（基类） | id、text_payload、vector、entities、created_at |
+| MemoryRecord（基础数据模型） | id、text_payload、vector、entities、created_at |
+| MilvusRecord（继承 MemoryRecord） | 同上，另含 build_collection_schema |
 | QueryHit | id、text_payload、score、entities、created_at |
 
 继承与扩展用法：
 
 ```python
 # 方式一：子类声明类型化字段，获得校验与 IDE 提示
-class TenantRecord(MemoryRecord):
+class TenantRecord(MilvusRecord):
     user_id: str
     tags: List[str] = []
 
@@ -431,7 +440,7 @@ resolve_record_class("myapp.models.TenantRecord")
 4. 基类字段仍保留约束（非空、向量非空、时间戳非负），子类自动继承校验
 5. 原 extra=forbid 的拼写保护由测试覆盖，避免误传字段静默入库
 6. 记录类可通过配置 models.record_class 指定，写入与读回共用同一个类
-7. 建表权归属记录类：MemoryRecord.build_collection_schema 硬编码基础字段，子类可覆盖以自定义表结构
+7. 建表权归属记录类：MilvusRecord.build_collection_schema 硬编码基础字段，子类可覆盖以自定义表结构
 
 ### 11.3 各模块职责与接口签名
 
@@ -443,6 +452,7 @@ resolve_record_class("myapp.models.TenantRecord")
 class StorageSettings(BaseModel):
     backend: Literal["memory", "milvus"] = "memory"
     milvus_uri: str = "localhost:19530"
+    milvus_db: str = "default"
     collection_name: str = "memory_store"
     vector_dim: int = Field(default=1024, gt=0)
     metric: Literal["COSINE", "L2", "IP"] = "COSINE"
@@ -475,6 +485,10 @@ class Settings(BaseSettings):
 
     @classmethod
     def load(cls, source=None, *, use_env=True, **overrides) -> Settings: ...
+
+
+# 分区名到分区模型的映射，用于在关闭环境变量时补齐字段默认值
+SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = { ... }
 ```
 
 加载入口与优先级：
@@ -497,6 +511,7 @@ class Settings(BaseSettings):
 | load_env_overrides(environ=None) | 把 RAG_ 前缀变量组装为分区字典，供 load 分层合并 |
 | ENV_PREFIX | 前缀常量 RAG_ |
 | ENV_NESTED_DELIMITER | 分区与字段之间的分隔符常量 |
+| _with_defaults(layered) | 用分区默认值补齐字段，供 use_env=False 屏蔽环境变量 |
 
 设计要点：
 
@@ -507,7 +522,7 @@ class Settings(BaseSettings):
 5. 环境变量支持嵌套覆盖，如 RAG_STORAGE__VECTOR_DIM 覆盖 storage.vector_dim
 6. 取值交由 pydantic 转换，JSON 对象与数组按 JSON 解析
 7. logging 分区中 json 为保留名，字段名为 json_output 并设置别名 json
-8. use_env 为 False 时走 model_validate，绕过环境变量源，结果只取决于显式配置
+8. use_env 为 False 时先以分区默认值补齐全部字段再作为构造实参，显式实参优先级最高，环境变量无从渗入，不依赖 model_validate 的版本行为
 9. load 的 source 为整体配置字典，与分区参数 overrides 同属代码硬编码
 10. 不提供配置文件读取：配置只来自代码与环境变量，避免部署期文件依赖
 #### 11.3.2 logging 子包（多框架适配）
@@ -645,7 +660,7 @@ def create_embedding_provider(name, settings, logger, **kwargs) -> BaseEmbedding
 ##### openai_provider.py 与 qwen_provider.py
 
 - openai：backend 为 openai，默认 text-embedding-3-small（1536 维），接口 api.openai.com 的 v1，Key 读 OPENAI_API_KEY
-- qwen：backend 为 qwen，默认 text-embedding-v3（1024 维），接口为 DashScope 兼容模式，Key 读 DASHSCOPE_API_KEY
+- qwen：backend 为 qwen，默认 qwen3.7-text-embedding（1024 维），接口为 DashScope 兼容模式，默认端点可按部署环境覆盖，Key 读 DASHSCOPE_API_KEY
 - qwen 直接继承 openai：DashScope 提供 OpenAI 兼容接口，仅默认值、地址、Key 变量与批量上限不同
 - 请求走标准库 urllib，不引入额外依赖；HTTP 与网络错误统一包装为 EmbeddingError
 - _post_json 为网络接缝，子类与测试可覆盖以隔离真实请求
@@ -665,50 +680,50 @@ def create_embedding_provider(name, settings, logger, **kwargs) -> BaseEmbedding
 
 #### 11.3.5 storage 子包
 
-##### schema.py
+##### 记录类与 Milvus 索引定义
 
-职责：声明式定义集合字段、索引，并提供记录与存储行之间的编解码。
+职责：记录类提供存储行编解码，milvus_store 定义索引与建表参数。
 
 | 字段 | 类型 | 索引类型 | 说明 |
 | :--- | :--- | :--- | :--- |
 | id | VARCHAR | Primary Key | 唯一标识，内容哈希 |
 | text_payload | VARCHAR | None | 原始记忆文本块 |
 | vector | FLOAT_VECTOR | HNSW 或 IVFLAT | 语义向量，维度取自配置 |
-| entities | ARRAY(VARCHAR) | Scalar Index | 实体列表，用于过滤 |
+| entities | ARRAY(VARCHAR) | Scalar Index | 实体列表，用于过滤；须声明 max_capacity 与元素级 max_length |
 | created_at | DOUBLE | Scalar Index | 创建或录入时间戳 |
 | metadata | JSON | None | 扩展字段容器 |
 
 已移除字段：memory_id（改名为 id）、user_id、last_accessed_at、recall_count。
 
-导出辅助：
+导出符号（记录类 / milvus_store）：
 
 | 名称 | 含义 |
 | :--- | :--- |
-| PRIMARY_FIELD | 主键字段名，值为 id |
-| METADATA_FIELD | 扩展字段容器名，值为 metadata |
-| BASE_COLUMNS | metadata 之外的平铺列 |
-| SCALAR_INDEX_TYPES | 各字段的标量索引类型 |
-| promoted_names(extra_columns) | 返回被提升为独立列的字段名 |
-| build_collection_fields(vector_dim, extra_columns) | 生成建表字段定义 |
-| build_vector_index_params(index_type, metric) | 生成向量索引参数 |
-| build_scalar_index_specs(field_names) | 生成标量索引配置 |
+| models.PRIMARY_FIELD | 主键字段名，值为 id |
+| models.METADATA_FIELD | 扩展字段容器名，值为 metadata |
+| models.BASE_FIELD_NAMES | metadata 之外的平铺列 |
+| milvus_store.SCALAR_INDEX_TYPES | 各字段的标量索引类型，可注入覆盖 |
+| milvus_store.VECTOR_INDEX_PARAMS | 各索引类型的默认构建参数，可经 register_vector_index_params 扩展 |
+| milvus_store.register_vector_index_params(index_type, params) | 登记或覆盖某索引类型的默认参数 |
+| milvus_store.build_vector_index_params(index_type, metric, params=None) | 生成向量索引参数；显式 params 优先，未登记类型留空交由 Milvus 采用默认 |
+| milvus_store.build_scalar_index_specs(field_names, index_types=None) | 生成标量索引配置；索引表可注入 |
 
-存储行编解码（扩展字段的落库与还原）：
+记录类提供的存储行编解码（扩展字段的落库与还原）：
 
 | 函数 | 作用 |
 | :--- | :--- |
-| to_storage_row(record, promoted) | 基类字段与提升列平铺，其余扩展字段写入 metadata |
-| from_storage_row(row, record_class, promoted) | 提升列与 metadata 一并还原为记录 |
-| flatten_row(row, promoted) | 存储行摊平为单层字典，供过滤复用 |
-| row_matches(row, filters, promoted) | 在存储行上做字段精确匹配 |
+| record.to_storage_row(promoted) | 基类字段与提升列平铺，其余扩展字段写入 metadata |
+| Cls.from_storage_row(row, promoted) | 提升列与 metadata 一并还原为记录 |
+| Cls.flatten_row(row, promoted) | 存储行摊平为单层字典，供过滤复用 |
+| Cls.row_matches(row, filters, promoted) | 在存储行上做字段精确匹配 |
 | encode_metadata 与 decode_metadata | 扩展字段与 JSON 文本之间的双向转换 |
-| is_base_field(name) | 判断字段属于平铺列还是扩展字段 |
+| models.BASE_FIELD_NAMES | 平铺列字段名，用于区分扩展字段 |
 
 设计约定：
 
 1. 扩展字段默认只在 metadata 一处序列化，新增扩展字段无需改表结构
 2. 提升为独立列的扩展字段不再重复写入 metadata，避免同一字段存两份
-3. 内存实现与 Milvus 实现共用同一套编解码，避免两条落库路径产生行为差异
+3. 编解码归属记录类（MemoryRecord 定义，MilvusRecord 继承），两个后端共用同一套行为
 4. 内存实现保存的是存储行而非 pydantic 对象，使单元测试真实覆盖序列化与还原
 5. 过滤在存储行层面进行，内存实现直接匹配字段，Milvus 实现转为 metadata 的 JSON 路径条件
 
@@ -745,9 +760,9 @@ def create_store(name, settings, logger, **kwargs) -> BaseVectorStore: ...
 职责：定义存储层抽象接口，隔离具体向量库实现。
 
 ```python
-class BaseVectorStore(ABC):
+class BaseVectorStore(ABC, Generic[RecordT]):
     def ensure_collection(self) -> None: ...
-    def upsert(self, records: List[MemoryRecord]) -> int: ...
+    def upsert(self, records: List[RecordT]) -> int: ...
     def query(self, vector, top_n, filters=None) -> List[QueryHit]: ...
     def close(self) -> None: ...
 ```
@@ -763,13 +778,13 @@ class BaseVectorStore(ABC):
 
 ##### models.build_collection_schema（建表入口）
 
-建表权由记录类掌握，MemoryRecord 默认硬编码 MemoryRecord 声明的字段：
+建表权由记录类掌握，MilvusRecord 默认硬编码声明的字段：
 
 ```python
-class MemoryRecord(BaseModel):
+class MilvusRecord(MemoryRecord):
     @classmethod
     def build_collection_schema(cls, pymilvus: MilvusModule, vector_dim: int) -> MilvusCollectionSchema:
-        """按 MemoryRecord 声明的字段硬编码创建集合表结构。"""
+        """按声明的字段硬编码创建集合表结构。"""
         ...
         return pymilvus.CollectionSchema(fields=fields, description=...)
 ```
@@ -777,7 +792,7 @@ class MemoryRecord(BaseModel):
 子类覆盖即可自定义表结构：
 
 ```python
-class TenantRecord(MemoryRecord):
+class TenantRecord(MilvusRecord):
     user_id: str
 
     @classmethod
@@ -792,29 +807,29 @@ class TenantRecord(MemoryRecord):
 设计要点：
 
 1. pymilvus 由调用方传入，模型层不依赖可选第三方库
-2. 硬编码字段与 schema.BASE_COLUMNS 一一对应，一致性由测试锁定
+2. 硬编码字段与 models.BASE_FIELD_NAMES 一一对应，一致性由测试锁定
 3. 维度非法时抛 ConfigError，避免生成无效表结构
-4. Milvus 侧仅负责调用与追加配置提升列，不再持有字段声明
+4. Milvus 侧仅负责调用记录类建表；索引参数与标量索引表定义在 milvus_store
 
 ##### milvus_store.py
 
 ```python
-class MilvusVectorStore(BaseVectorStore):
-    def __init__(self, settings, logger, record_class=None, extra_columns=None, alias="rag_data"): ...
+class MilvusVectorStore(BaseVectorStore[MilvusRecord]):
+    def __init__(self, settings, logger, record_class=None, alias="rag_data"): ...
 
     def column_names(self) -> List[str]: ...
     def promoted_columns(self) -> List[str]: ...
     def vector_index_params(self) -> Dict[str, Any]: ...
-    def scalar_index_specs(self) -> List[Dict[str, Any]]: ...
+    def scalar_index_specs(self) -> List[ScalarIndexSpec]: ...
 
     def ensure_collection(self) -> None: ...
-    def upsert(self, records: List[MemoryRecord]) -> int: ...
+    def upsert(self, records: List[MilvusRecord]) -> int: ...
     def query(self, vector, top_n, filters=None) -> List[QueryHit]: ...
 ```
 
 建表流程（已实现）：
 
-1. 惰性连接：首次调用时按 settings.storage.milvus_uri 连接并缓存
+1. 惰性连接：首次调用时按 settings.storage.milvus_uri 与 milvus_db 连接并缓存，库名随连接生效
 2. 集合不存在：调用记录类的 build_collection_schema 生成 schema，
    追加配置声明的提升列，再建表、建向量索引与标量索引，最后 load
 3. 集合已存在：跳过建表，校验既有向量维度与配置一致，不一致抛 SchemaMismatchError
@@ -827,7 +842,7 @@ class MilvusVectorStore(BaseVectorStore):
 
 | 场景 | column_names 来源 |
 | :--- | :--- |
-| 未建表 | schema.BASE_COLUMNS 加配置提升列 |
+| 未建表 | models.BASE_FIELD_NAMES 加配置提升列 |
 | 已建表 | 集合实际字段（剔除 metadata），可识别子类新增列 |
 
 promoted_columns 返回除基类字段外的平铺列，用于决定哪些扩展字段平铺写入、
@@ -910,7 +925,7 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 | test_entities.py | extract_entities | 去重、大小写归一、空文本 |
 | test_embedder.py | Embedder | 批次切分、维度校验、假模型注入 |
 | test_embedding_provider.py | 嵌入模型注册表 | 内置 provider、继承即注册、配置解析、API Key 来源、请求构造、响应解析、错误包装、配置驱动切换、批量上限 |
-| test_schema.py | Schema 与编解码 | 字段与索引、主键为 id、metadata 划分、存储行往返、提升列、建表字段生成 |
+| test_storage_row.py | 存储行编解码 | 字段划分、metadata、往返、提升列、过滤 |
 | test_store_contract.py | BaseVectorStore | 以 InMemoryVectorStore 跑接口契约、按 id 幂等、filters 过滤基类与扩展字段 |
 | test_pipeline.py | IngestionPipeline | 端到端导入、幂等、分批切分 |
 | test_public_api.py | 公共入口 | 版本、__all__ 可解析、核心符号可从包根获取、端到端 |
@@ -932,7 +947,7 @@ from rag_data import Settings, RagData, InMemoryVectorStore
 | :--- | :--- |
 | 版本 | __version__ |
 | 配置 | Settings、StorageSettings、ModelSettings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides |
-| 数据模型 | DocumentChunk、MemoryRecord、QueryHit、resolve_record_class、DEFAULT_RECORD_CLASS_PATH |
+| 数据模型 | DocumentChunk、MemoryRecord、MilvusRecord、QueryHit、resolve_record_class、DEFAULT_RECORD_CLASS_PATH |
 | 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 存储 | BaseVectorStore、InMemoryVectorStore、register_store、register_backend、available_backends、is_registered、resolve_store、create_store |

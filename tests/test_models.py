@@ -5,7 +5,7 @@ from typing import List
 import pytest
 from pydantic import ValidationError
 
-from rag_data.models import BASE_FIELD_NAMES, DocumentChunk, MemoryRecord, QueryHit
+from rag_data.models import BASE_FIELD_NAMES, DocumentChunk, MemoryRecord, MilvusRecord, QueryHit
 
 
 def _record(**overrides):
@@ -98,3 +98,23 @@ def test_document_chunk_is_frozen():
     chunk = DocumentChunk(chunk_id="c1", user_id="u1", source_path="a.md", text="t", created_at=0.0)
     with pytest.raises(ValidationError):
         chunk.text = "x"
+
+
+def test_memory_record_has_no_backend_schema():
+    """MemoryRecord 只描述数据，不携带任何后端建表逻辑。"""
+    assert not hasattr(MemoryRecord, "build_collection_schema")
+
+
+def test_milvus_record_extends_memory_record():
+    """MilvusRecord 继承 MemoryRecord，并补充 Milvus 建表能力。"""
+    assert issubclass(MilvusRecord, MemoryRecord)
+    assert MilvusRecord is not MemoryRecord
+    assert hasattr(MilvusRecord, "build_collection_schema")
+
+
+def test_milvus_record_keeps_base_fields_and_extras():
+    record = MilvusRecord(
+        id="m1", text_payload="t", vector=[0.1], created_at=1.0, user_id="u1"
+    )
+    assert record.extra_fields == {"user_id": "u1"}
+    assert set(record.to_row()) >= set(BASE_FIELD_NAMES)

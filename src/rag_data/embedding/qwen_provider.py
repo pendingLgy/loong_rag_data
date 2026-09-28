@@ -8,12 +8,12 @@ from rag_data.embedding.openai_provider import OpenAIEmbeddingProvider
 
 
 class QwenEmbeddingProvider(OpenAIEmbeddingProvider):
-    """调用 DashScope 的 OpenAI 兼容接口，默认使用 text-embedding-v3。"""
+    """调用 DashScope 兼容接口；默认模型与端点见类属性，可按部署环境覆盖。"""
 
     backend = "qwen"
-    default_model = "text-embedding-v3"
+    default_model = "qwen3.7-text-embedding"
     default_dim = 1024
-    default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    default_base_url = "https://llm-aa9vce2460xvbj3o.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
     api_key_env = "DASHSCOPE_API_KEY"
     # DashScope 单次请求最多接受 10 条文本，超限会被拒绝。
     max_batch_size = 10
