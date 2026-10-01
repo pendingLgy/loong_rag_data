@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any, List, Optional, Type
+from typing import Any, List, Optional
 
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
@@ -12,8 +12,8 @@ from rag_data.ingestion import chunking
 from rag_data.ingestion import entities as entities_module
 from rag_data.ingestion import parsers
 from rag_data.logging.base import LoggerAdapter
-from rag_data.models import DocumentChunk, MemoryRecord
-from rag_data.storage.base import BaseVectorStore
+from rag_data.models import DocumentChunk
+from rag_data.storage.milvus_store import MilvusRecord
 
 DEFAULT_USER_ID = "default"
 
@@ -23,15 +23,12 @@ class IngestionPipeline:
 
     def __init__(
         self,
-        store: BaseVectorStore,
+        store: Any,
         embedder: Embedder,
         settings: Settings,
         logger: LoggerAdapter,
         nlp: Optional[Any] = None,
-        record_class: Type[MemoryRecord] = MemoryRecord,
 ) -> None:
-        # record_class 由配置 models.record_class 解析后注入，写入即产出自定义子类。
-        self._record_class = record_class
         self._store = store
         self._embedder = embedder
         self._settings = settings
@@ -62,7 +59,7 @@ class IngestionPipeline:
             logger=self._logger,
         )
         written = 0
-        batch: List[MemoryRecord] = []
+        batch: List[MilvusRecord] = []
         for index, chunk_text in enumerate(chunk_texts):
             chunk = self._make_chunk(path, index, chunk_text, entity_list, resolved_user_id)
             batch.append(self._make_record(chunk))
@@ -98,16 +95,14 @@ class IngestionPipeline:
             created_at=time.time(),
         )
 
-    def _make_record(self, chunk: DocumentChunk) -> MemoryRecord:
+    def _make_record(self, chunk: DocumentChunk) -> MilvusRecord:
         vector = self._embedder.encode([chunk.text])[0]
-        # 使用配置的记录类构造记录，使自定义字段获得校验并随记录落库。
-        return self._record_class(
+        return MilvusRecord(
             id=chunk.chunk_id,
             text_payload=chunk.text,
             vector=vector,
             entities=list(chunk.entities),
             created_at=chunk.created_at,
-            user_id=chunk.user_id,
         )
 
     @staticmethod

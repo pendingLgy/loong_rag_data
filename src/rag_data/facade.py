@@ -8,7 +8,6 @@
 #   app = RagData.create()          # 装配全部流程
 #   app.init_collection()           # 流程：建集合
 #   app.ingest([docs.md])           # 流程：批量导入
-#   app.query(vector, top_n=5)      # 流程：按向量检索
 #
 # 也可以只调用单个流程的装配方法，例如仅需要日志与存储：
 #
@@ -18,19 +17,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Type
+from typing import Any, Mapping, Optional, Sequence
 
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
 from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging
-from rag_data.models import MemoryRecord, QueryHit, resolve_record_class
-from rag_data.storage.base import BaseVectorStore
-from rag_data.storage.registry import create_store
-from rag_data.storage.memory_store import InMemoryVectorStore
+from rag_data.store_registry import create_store
 
-DEFAULT_TOP_N = 5
 ConfigSource = Optional[Mapping[str, Any]]
 _UNSET: Any = object()
 
@@ -50,28 +45,12 @@ def build_logger(settings: Settings) -> LoggerAdapter:
     return configure_logging(settings)
 
 
-def build_record_class(settings: Settings) -> Type[MemoryRecord]:
-    """流程：解析配置中的记录类路径；默认 MilvusRecord，可按需继承扩展字段。"""
-    return resolve_record_class(settings.models.record_class)
-
-
-def build_store(
-    settings: Settings,
-    logger: LoggerAdapter,
-    record_class: Optional[Type[MemoryRecord]] = None,
-) -> BaseVectorStore:
+def build_store(settings: Settings, logger: LoggerAdapter) -> Any:
     """流程三：按 settings.storage.backend 从注册表装配向量库。"""
 
-    # 后端实现由注册表解析：继承 BaseVectorStore 即自动注册，
-    # 因此新增存储方式只需实现类并在配置里写后端名，无需改动本函数。
-    cls = record_class if record_class is not None else build_record_class(settings)
-    # 表结构由记录类声明，装配时无需再传入额外的列。
-    return create_store(
-        settings.storage.backend,
-        settings,
-        logger,
-        record_class=cls,
-    )
+    # 后端实现由注册表解析：新增存储方式只需实现类，
+    # 再以 register_store 登记后端名，无需改动本函数。
+    return create_store(settings.storage.backend, settings, logger)
 
 
 def build_nlp(settings: Settings, logger: LoggerAdapter) -> Optional[Any]:
@@ -103,15 +82,13 @@ def build_embedder(settings: Settings, logger: LoggerAdapter, model: Optional[An
 
 def build_pipeline(
     settings: Settings,
-    store: BaseVectorStore,
+    store: Any,
     embedder: Embedder,
     logger: LoggerAdapter,
     nlp: Optional[Any] = None,
-    record_class: Optional[Type[MemoryRecord]] = None,
 ) -> IngestionPipeline:
     """流程六：装配离线导入管道。"""
-    cls = record_class if record_class is not None else build_record_class(settings)
-    return IngestionPipeline(store, embedder, settings, logger, nlp=nlp, record_class=cls)
+    return IngestionPipeline(store, embedder, settings, logger, nlp=nlp)
 
 
 # ---------------- 一站式门面 ----------------
@@ -124,24 +101,15 @@ class RagData:
         self,
         settings: Optional[Settings] = None,
         *,
-        store: Optional[BaseVectorStore] = None,
+        store: Optional[Any] = None,
         embedder: Optional[Embedder] = None,
         logger: Optional[LoggerAdapter] = None,
         nlp: Any = _UNSET,
         model: Optional[Any] = None,
-        record_class: Optional[Type[MemoryRecord]] = None,
-) -> None:
+    ) -> None:
         self.settings = settings if settings is not None else build_settings()
         self.logger = logger if logger is not None else build_logger(self.settings)
-        # 记录类由配置 models.record_class 决定，写入与读回保持一致。
-        self.record_class = (
-            record_class if record_class is not None else build_record_class(self.settings)
-        )
-        self.store = (
-            store
-            if store is not None
-            else build_store(self.settings, self.logger, record_class=self.record_class)
-        )
+        self.store = store if store is not None else build_store(self.settings, self.logger)
         self.nlp = build_nlp(self.settings, self.logger) if nlp is _UNSET else nlp
         self.embedder = (
             embedder if embedder is not None else build_embedder(self.settings, self.logger, model=model)
@@ -152,7 +120,6 @@ class RagData:
             self.embedder,
             self.logger,
             nlp=self.nlp,
-            record_class=self.record_class,
         )
 
     @classmethod
@@ -185,22 +152,6 @@ class RagData:
     def ingest_file(self, path: str, user_id: Optional[str] = None) -> int:
         """流程：导入单个文件，返回写入条数。"""
         return self.pipeline.ingest_file(path, user_id=user_id)
-
-    def query(
-        self,
-        vector: List[float],
-        top_n: Optional[int] = None,
-        user_id: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> List[QueryHit]:
-        """流程：按向量检索候选，按相似度降序返回。"""
-        # filters 支持基类字段与扩展字段；user_id 为常用项，等价于 filters 中的同名字段。
-        merged: Dict[str, Any] = dict(filters) if filters else {}
-        if user_id is not None:
-            merged["user_id"] = user_id
-        limit = DEFAULT_TOP_N if top_n is None else top_n
-        return self.store.query(vector, top_n=limit, filters=merged or None)
-
 
     def close(self) -> None:
         """流程：释放底层资源。"""
@@ -237,12 +188,10 @@ __all__ = [
     "RagData",
     "build_settings",
     "build_logger",
-    "build_record_class",
     "build_store",
     "build_nlp",
     "build_embedder",
     "build_pipeline",
     "init_collection",
     "ingest",
-    "DEFAULT_TOP_N",
 ]

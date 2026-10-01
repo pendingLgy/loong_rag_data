@@ -8,9 +8,9 @@
 # 环境变量命名规则：RAG_ 前缀，分区名与字段名大写，双下划线分隔，例如：
 #   RAG_STORAGE__BACKEND=milvus
 #   RAG_STORAGE__VECTOR_DIM=1024
+#   RAG_STORAGE__STORE_MODULES=["myapp.stores", "my_stores.py"]
 #   RAG_LOGGING__LEVEL=DEBUG
 #   RAG_LOGGING__JSON=true
-#   RAG_MODELS__PROMOTED_FIELDS=[{"name": "user_id", "type": "VARCHAR"}]
 
 from __future__ import annotations
 
@@ -23,10 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_data.exceptions import ConfigError
-from rag_data.models import DEFAULT_RECORD_CLASS_PATH
 
 SECTION_STORAGE = "storage"
-SECTION_MODELS = "models"
 SECTION_CHUNKING = "chunking"
 SECTION_EMBEDDING = "embedding"
 SECTION_NLP = "nlp"
@@ -34,7 +32,6 @@ SECTION_LOGGING = "logging"
 
 MODULE_SECTIONS: List[str] = [
     SECTION_STORAGE,
-    SECTION_MODELS,
     SECTION_CHUNKING,
     SECTION_EMBEDDING,
     SECTION_NLP,
@@ -46,15 +43,18 @@ ENV_PREFIX = "RAG_"
 ENV_NESTED_DELIMITER = "__"
 
 
-
 class StorageSettings(BaseModel):
     """向量库相关配置。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    # 后端名对应存储后端注册表中的键；继承 BaseVectorStore 即自动注册，
-    # 内置 memory 与 milvus，可用 rag_data.available_backends() 查看。
-    backend: str = Field(default="memory")
+    # 后端名对应存储后端注册表中的键；内置 milvus，
+    # 可用 rag_data.available_backends() 查看。
+    backend: str = Field(default="milvus")
+    # 额外的存储后端模块：点分模块路径（myapp.stores）或以 .py 结尾的文件路径。
+    # 模块在导入时调用 register_store 或 register_backend 完成登记；
+    # 装配向量库时按需导入，重复导入幂等。
+    store_modules: List[str] = Field(default_factory=list)
     milvus_uri: str = Field(default="localhost:19530")
     # 目标数据库名。Milvus 支持多库隔离，需与 collection_name 所在库一致；
     # 默认库名为 default，可用自定义库隔离不同项目的数据。
@@ -64,22 +64,6 @@ class StorageSettings(BaseModel):
     metric: Literal["COSINE", "L2", "IP"] = "COSINE"
     index_type: Literal["HNSW", "IVFLAT"] = "HNSW"
 
-
-class ModelSettings(BaseModel):
-    """数据模型相关配置。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # 记录类的点分路径。默认 MilvusRecord（含 Milvus 建表）；继承它或 MemoryRecord
-    # 扩展字段后，把类路径填在这里即可切换；
-    # 写入与读回都会使用该类，因此扩展字段可完整往返。
-    record_class: str = Field(default=DEFAULT_RECORD_CLASS_PATH)
-    # 需要提升为独立物理列的扩展字段，形如
-    # [{"name": "user_id", "type": "VARCHAR", "max_length": 128}]；
-    # 提升后可建标量索引，未提升的扩展字段统一存入 metadata。
-    promoted_fields: List[Dict[str, Any]] = Field(default_factory=list)
-
-
 class ChunkingSettings(BaseModel):
     """两阶段语义切块参数。"""
 
@@ -87,7 +71,6 @@ class ChunkingSettings(BaseModel):
 
     max_chars: int = Field(default=250, ge=150, le=300)
     overlap_sents: int = Field(default=1, ge=0)
-
 
 class EmbeddingSettings(BaseModel):
     """向量化参数：provider 决定实现，其余为通用与实现专属配置。"""
@@ -108,14 +91,12 @@ class EmbeddingSettings(BaseModel):
     base_url: str = Field(default="")
     timeout: float = Field(default=60.0, gt=0)
 
-
 class NLPSettings(BaseModel):
     """分句与实体抽取参数。"""
 
     model_config = ConfigDict(extra="forbid")
 
     spacy_model: str = Field(default="zh_core_web_sm")
-
 
 class LoggingSettings(BaseModel):
     """日志适配层参数。json 为保留名，故字段名为 json_output 并设置别名。"""
@@ -126,18 +107,15 @@ class LoggingSettings(BaseModel):
     level: str = Field(default="INFO")
     json_output: bool = Field(default=False, alias="json")
 
-
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
     SECTION_STORAGE: StorageSettings,
-    SECTION_MODELS: ModelSettings,
     SECTION_CHUNKING: ChunkingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
     SECTION_NLP: NLPSettings,
     SECTION_LOGGING: LoggingSettings,
 }
-
 
 class Settings(BaseSettings):
     """根配置：按模块分区的嵌套模型，默认读取 RAG_ 前缀的环境变量。"""
@@ -153,7 +131,6 @@ class Settings(BaseSettings):
     )
 
     storage: StorageSettings = Field(default_factory=StorageSettings)
-    models: ModelSettings = Field(default_factory=ModelSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     nlp: NLPSettings = Field(default_factory=NLPSettings)
@@ -188,7 +165,6 @@ class Settings(BaseSettings):
         # 不依赖 model_validate 是否绕过环境源这一版本相关行为。
         return cls(**_with_defaults(layered))
 
-
 def load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     """把 RAG_ 前缀的环境变量组装为分区字典，键形如 RAG_STORAGE__VECTOR_DIM。"""
     source = os.environ if environ is None else environ
@@ -202,11 +178,9 @@ def load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str,
             _assign_nested(data, parts, _parse_env_value(raw))
     return data
 
-
 def _filter_sections(data: Dict[str, Any]) -> Dict[str, Any]:
     """仅保留已知分区，忽略环境中无关的 RAG_ 变量。"""
     return {name: value for name, value in data.items() if name in MODULE_SECTIONS}
-
 
 def _validate_sections(*groups: Mapping[str, Any]) -> None:
     """校验代码硬编码中的分区名合法。"""
@@ -216,7 +190,6 @@ def _validate_sections(*groups: Mapping[str, Any]) -> None:
                 raise ConfigError(
                     "未知的配置分区：" + str(name) + "；可用分区：" + ", ".join(MODULE_SECTIONS)
                 )
-
 
 def _merge_sections(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> Dict[str, Any]:
     """按分区合并：同名分区逐字段覆盖，其余字段保留。"""
@@ -231,7 +204,6 @@ def _merge_sections(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> Di
             merged[name] = value
     return merged
 
-
 def _with_defaults(layered: Mapping[str, Any]) -> Dict[str, Any]:
     """用各分区默认值补齐字段，使构造实参覆盖全部字段，从而屏蔽环境变量。"""
     filled: Dict[str, Any] = {}
@@ -244,7 +216,6 @@ def _with_defaults(layered: Mapping[str, Any]) -> Dict[str, Any]:
         filled[name] = section
     return filled
 
-
 def _assign_nested(data: Dict[str, Any], parts: List[str], value: Any) -> None:
     """按路径写入嵌套字典，如 ["storage", "vector_dim"]。"""
     node = data
@@ -255,7 +226,6 @@ def _assign_nested(data: Dict[str, Any], parts: List[str], value: Any) -> None:
             node[part] = child
         node = child
     node[parts[-1]] = value
-
 
 def _parse_env_value(raw: Any) -> Any:
     """解析环境变量取值：JSON 对象或数组按 JSON 解析，其余交给 pydantic 转换。"""

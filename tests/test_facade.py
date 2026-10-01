@@ -3,8 +3,9 @@
 import os
 
 import rag_data
+from fake_store import FakeStore
+from rag_data.storage.milvus_store import MilvusVectorStore
 from rag_data import (
-    InMemoryVectorStore,
     RagData,
     Settings,
     build_embedder,
@@ -35,6 +36,7 @@ def _app(settings, logger, model):
         settings,
         logger=logger,
         nlp=None,
+        store=FakeStore(),
         embedder=build_embedder(settings, logger, model=model),
 )
 
@@ -62,9 +64,9 @@ def test_build_logger_returns_adapter(settings):
     assert build_logger(settings) is not None
 
 
-def test_build_store_defaults_to_memory(settings, logger):
+def test_build_store_defaults_to_milvus(settings, logger):
     store = build_store(settings, logger)
-    assert isinstance(store, InMemoryVectorStore)
+    assert isinstance(store, MilvusVectorStore)
 
 
 def test_build_nlp_degrades_when_spacy_missing(settings, logger):
@@ -83,9 +85,15 @@ def test_build_pipeline_returns_pipeline(settings, logger):
 
 
 def test_create_assembles_all_flow_components(logger, settings):
-    app = RagData(settings, logger=logger, nlp=None, embedder=build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim)))
+    app = RagData(
+        settings,
+        logger=logger,
+        nlp=None,
+        store=FakeStore(),
+        embedder=build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim)),
+    )
     assert isinstance(app.settings, Settings)
-    assert isinstance(app.store, InMemoryVectorStore)
+    assert isinstance(app.store, FakeStore)
     assert app.pipeline is not None
 
 
@@ -112,27 +120,9 @@ def test_ingest_paths_flow(tmp_path, settings, logger):
     assert app.store.count() == written
 
 
-def test_ingest_accepts_user_id(tmp_path, settings, logger):
-    app = _app(settings, logger, _FakeModel(settings.storage.vector_dim))
-    path = _doc(tmp_path, "u.md", "租户内容。")
-    app.ingest_file(path, user_id="tenant-a")
-    hits = app.query([0.1] * settings.storage.vector_dim, user_id="tenant-a")
-    assert hits
-    other = app.query([0.1] * settings.storage.vector_dim, user_id="tenant-b")
-    assert other == []
-
-
-def test_query_flow_uses_default_top_n(tmp_path, settings, logger):
-    app = _app(settings, logger, _FakeModel(settings.storage.vector_dim))
-    path = _doc(tmp_path, "q.md", "内容一。内容二。内容三。")
-    app.ingest_file(path)
-    hits = app.query([0.1] * settings.storage.vector_dim)
-    assert 0 < len(hits) <= rag_data.facade.DEFAULT_TOP_N
-
-
 def test_context_manager_closes_store(settings, logger):
     with _app(settings, logger, _FakeModel(settings.storage.vector_dim)) as app:
-        assert isinstance(app.store, InMemoryVectorStore)
+        assert isinstance(app.store, FakeStore)
 
 
 def test_one_shot_ingest(tmp_path, monkeypatch):
@@ -142,6 +132,7 @@ def test_one_shot_ingest(tmp_path, monkeypatch):
     app_kwargs = {
         "logger": logger,
         "nlp": None,
+        "store": FakeStore(),
         "embedder": build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim)),
     }
     written = ingest([path], None, **app_kwargs)
@@ -151,7 +142,7 @@ def test_one_shot_ingest(tmp_path, monkeypatch):
 def test_one_shot_init_collection():
     settings = Settings()
     logger = build_logger(settings)
-    init_collection(None, logger=logger, nlp=None)
+    init_collection(None, logger=logger, nlp=None, store=FakeStore())
 
 
 def test_facade_is_exported_from_package_root():

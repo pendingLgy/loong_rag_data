@@ -17,7 +17,7 @@
 - src 下的 rag_data：核心包已生成，含 config、models、exceptions、facade、ingestion、embedding、storage、logging
 - ingestion：解析、两阶段切块、实体抽取与导入编排
 - embedding：向量化封装，含批次与维度校验
-- storage：Schema 声明式定义与存储行编解码、抽象接口、后端注册表、内存实现、Milvus 实现（建表、写入与检索已落地）
+- storage：存储行编解码、后端注册表、Milvus 实现（建表与写入已落地）
 - logging：日志适配层，含 stdlib、loguru、structlog 三后端
 - facade：流程门面，一站式装配与调用
 - tests：单元测试覆盖模型、配置、日志、切块、实体、向量化、Schema、存储契约、导入管道、公共入口、记录类解析、流程门面与 Milvus 建表
@@ -73,7 +73,7 @@
 | 文档解析 | Unstructured、MinerU | 需带 Markdown 层级输出 |
 | 分句与实体 | spaCy、zh_core_web_sm | 停用 ner 与 parser，启用 sentencizer |
 | 向量化 | 外部 Embedding 服务（openai、qwen）或自建 provider | 默认 openai；维度需与 storage.vector_dim 对齐 |
-| 向量库 | pymilvus、可选 qdrant-client | 抽象 BaseVectorStore 接口 |
+| 向量库 | pymilvus、可选 qdrant-client | 存储后端接口（无基类，鸭子类型） |
 | 日志框架 | stdlib logging、loguru、structlog | 由适配层统一封装，可切换 |
 | 构建与依赖 | hatch 管理构建与运行环境，uv 解析与安装依赖 | 构建后端为 hatchling |
 | 测试 | pytest、pytest-cov | 已配置 coverage |
@@ -95,7 +95,10 @@ rag-data
 │     ├─ __about__.py        版本号
 │     ├─ __init__.py         公共入口，统一导出 API
 │     ├─ config.py           pydantic-settings 全局配置
-│     ├─ models.py           pydantic 数据模型与记录类解析
+│     ├─ store_registry.py   存储后端注册表与用户模块加载
+│     ├─ models              pydantic 数据模型
+│     │  ├─ __init__.py      公共导出，保持 rag_data.models 入口不变
+│     │  └─ document.py      DocumentChunk
 │     ├─ exceptions.py       领域异常基类
 │     ├─ facade.py           流程门面，封装各流程调用方法
 │     ├─ ingestion           解析与切块
@@ -106,8 +109,7 @@ rag-data
 │     ├─ embedding           向量化接口、provider 注册表与 openai、qwen 实现
 │     │  └─ embedder.py      Embedding 封装
 │     ├─ storage             向量库
-│     │  ├─ base.py          BaseVectorStore 接口
-│     │  └─ milvus_store.py  Milvus 实现（建表、写入、检索）
+│     │  └─ milvus_store.py  MilvusRecord 与 Milvus 实现（建表、写入）
 │     └─ logging             日志适配层
 │        ├─ base.py          LoggerAdapter 抽象
 │        ├─ stdlib_adapter.py
@@ -125,7 +127,6 @@ rag-data
    ├─ test_store_contract.py
    ├─ test_pipeline.py
    ├─ test_public_api.py
-   ├─ test_record_class.py
    ├─ test_facade.py
    └─ test_milvus_mapping.py
 ```
@@ -153,13 +154,13 @@ rag-data
 
 任务：
 
-- models.py：以 pydantic BaseModel 定义 DocumentChunk、MemoryRecord、MilvusRecord、QueryHit
+- models 包：以 pydantic BaseModel 定义 DocumentChunk 与记录类路径解析；MilvusRecord 由 storage.milvus_store 承载
 - 为关键字段加约束：text 非空、vector 维度校验、score 取值 0 到 1
 - config.py：以 pydantic-settings BaseSettings 定义 Settings，按模块分区，含 env_prefix、嵌套分隔符、.env 加载
 - 对互相约束的字段使用 model_validator，对单字段使用 field_validator
 - 配置来源优先级：初始化参数 大于 环境变量 大于 .env 大于 默认值
 
-交付：models.py、config.py
+交付：models 包、config.py
 验收：非法输入抛 ValidationError 且信息可读；环境变量可覆盖默认值
 
 ### M2 日志适配层（1 人天）
@@ -195,14 +196,14 @@ rag-data
 
 任务：
 
-- 记录类定义字段：id、text_payload、vector、entities、created_at、metadata
-- models.MilvusRecord 声明建表字段；milvus_store 定义索引：主键、标量索引（entities、created_at）、向量索引 HNSW、度量 COSINE
-- 记录类提供存储行编解码：记录与行之间的双向映射，扩展字段进 metadata
+- 记录类定义字段：id、text_payload、vector、entities、created_at
+- milvus_store.MilvusRecord 声明建表字段并定义索引：主键、标量索引（entities、created_at）、向量索引 HNSW、度量 COSINE
+- 记录类提供存储行编解码：记录与行之间的双向映射，扩展字段按提升列平铺
 - milvus_store 提供建表生成器：向量索引参数、标量索引配置
-- base.py 抽象接口：ensure_collection、upsert、query
+- 存储接口（无基类）：ensure_collection、upsert、close
 - milvus_store.py 实现，建表前用 Settings.vector_dim 与模型维度做校验
 
-交付：models.py、base.py、milvus_store.py
+交付：models 包、storage 包
 验收：本地 Milvus 可建表并写入读取；接口用内存 Fake 实现做契约测试
 
 ### M5 向量化模块与导入管道（2 人天）
@@ -213,7 +214,7 @@ rag-data
 - ingestion 的 entities.py：spaCy NER 抽取实体列表
 - ingestion 的 parsers.py：PDF、Word、Markdown 转带层级文本，清理页眉页脚与断词
 - ingestion 的 pipeline.py：解析 到 切块 到 实体抽取 到 向量化 到 upsert，支持分批与幂等
-- 全链路以 pydantic 模型传递数据，构造 MemoryRecord 时自动校验维度与字段
+- 全链路以 pydantic 模型传递数据，构造 MilvusRecord 时自动校验维度与字段
 - 记录类可由配置指定，写入与读回共用同一个类
 
 交付：embedder.py、entities.py、parsers.py、pipeline.py
@@ -225,8 +226,7 @@ rag-data
 
 - 包根 __init__.py 统一导出全部公共 API，并登记 __all__
 - facade.py 封装各流程调用：配置、日志、存储、句柄、向量化、管道
-- RagData 提供 init_collection、ingest、ingest_file、query、close，支持依赖注入与上下文管理
-- build_record_class 解析配置中的记录类路径，支持继承扩展
+- RagData 提供 init_collection、ingest、ingest_file、close，支持依赖注入与上下文管理
 
 交付：__init__.py、facade.py
 验收：外部仅导入 rag_data 即可完成全部流程；__all__ 全部可解析
@@ -243,10 +243,8 @@ rag-data
 ## 5. 关键接口契约
 
 - config.Settings：pydantic-settings 的 BaseSettings，按模块分区，实例化即完成校验
-- models.DocumentChunk、models.MemoryRecord、models.MilvusRecord、models.QueryHit：pydantic BaseModel
-- models.MemoryRecord：基础数据模型，extra 允许，支持子类扩展或运行时传入，通过 extra_fields 与 to_row 暴露
-- models.MilvusRecord：继承 MemoryRecord，补充 build_collection_schema（Milvus 建表）
-- models.resolve_record_class（path）返回 MemoryRecord 的子类；非法路径抛 ConfigError
+- models.DocumentChunk：pydantic BaseModel
+- storage.milvus_store.MilvusRecord：基础字段与校验，extra 允许；含存储行编解码与 build_collection_schema（Milvus 建表）
 - logging.factory.configure_logging（settings）返回 LoggerAdapter
 - logging.factory.get_logger（name）返回 LoggerAdapter
 - logging.base.LoggerAdapter：debug、info、warning、error、exception、bind、context
@@ -254,10 +252,10 @@ rag-data
 - ingestion.chunking.build_semantic_chunks（text，max_chars 默认 250，overlap_sents 默认 1，nlp 可选，logger 可选）返回切块列表
 - ingestion.entities.extract_entities（text，nlp 可选）返回实体列表
 - embedding.embedder.Embedder.encode（texts）返回向量列表
-- 记录类方法：to_storage_row、from_storage_row、flatten_row、row_matches
-- storage.base.BaseVectorStore：ensure_collection、upsert（records）、query（vector，top_n，filters 可选）
+- 记录类方法：to_storage_row、from_storage_row
+- 存储实现：ensure_collection、upsert（records）；无需继承基类，登记后端名即可装配
 - ingestion.pipeline.IngestionPipeline：ingest_file（path，user_id 可选）、run（paths，user_id 可选）返回写入条数
-- facade.RagData：init_collection、ingest、ingest_file、query、close，支持上下文管理
+- facade.RagData：init_collection、ingest、ingest_file、close，支持上下文管理
 - 一键入口：init_collection（source）、ingest（paths，source，user_id）
 
 ## 6. 配置与默认值
@@ -266,15 +264,14 @@ rag-data
 
 | 模块 | 字段 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| storage | backend | memory | 存储后端名，对应注册表键；继承 BaseVectorStore 即自动注册 |
+| storage | backend | milvus | 存储后端名，对应注册表键；用 register_store 显式登记 |
+| storage | store_modules | 空列表 | 用户提供的后端模块：点分路径或以 .py 结尾的文件路径，导入即登记 |
 | storage | milvus_uri | localhost:19530 | Milvus 服务地址 |
 | storage | milvus_db | default | 目标数据库名，集合须在该库中 |
 | storage | collection_name | memory_store | 集合名 |
 | storage | vector_dim | 1024 | 向量维度，建表前校验 |
 | storage | metric | COSINE | 距离度量 |
 | storage | index_type | HNSW | 向量索引类型 |
-| models | record_class | rag_data.models.MilvusRecord | 记录类点分路径，切换自定义扩展 |
-| models | promoted_fields | 空列表 | 需提升为独立列的扩展字段，形如 name、type、max_length |
 | chunking | max_chars | 250 | 切块字符上限，区间 150 至 300 |
 | chunking | overlap_sents | 1 | 切块重叠句数 |
 | embedding | model | 空字符串 | Embedding 模型标识 |
@@ -306,10 +303,9 @@ rag-data
 | 日志框架为可选依赖 | 未安装时导入失败 | 适配器惰性导入，缺失时回退 stdlib 并给出提示 |
 | 子包名 logging 与标准库同名 | 误导入歧义 | 包内一律绝对导入，必要时改名 observability |
 | spaCy 中文模型体积与安装 | 首次环境搭建慢 | 模型下载脚本化与 CI 缓存 |
-| Milvus 本地依赖较重 | 集成测试不便 | 抽象接口加内存 Fake，建表用假 pymilvus 测试，集成测试可选 |
+| Milvus 本地依赖较重 | 集成测试不便 | 存储接口加测试替身，建表用假 pymilvus 测试，集成测试可选 |
 | Unstructured 与 MinerU 版本差异 | 解析结果不稳定 | 锁版本并加解析回归样例 |
 | Embedding 模型与维度不一致 | 索引与查询不匹配 | 维度写入配置，pydantic 与建表双重校验 |
-| 过滤表达式拼接 | 存在注入风险 | 字面量转义已实现基础防护，生产需补强，已标 TODO |
 | Python 3.8 运行期类型语法 | list 下标等新语法在 3.8 报错 | 文件首行加 from __future__ import annotations |
 
 ## 9. 建议排期（合计约 7.5 人天）
@@ -343,9 +339,9 @@ IngestionPipeline            应用编排层
    |
 parsers、chunking、entities、embedder   领域服务层
    |
-BaseVectorStore              抽象接口层
+存储接口（无基类）           抽象接口层
    |
-MilvusVectorStore 与 InMemoryVectorStore   基础设施层
+MilvusVectorStore              基础设施层
 
 config.Settings（pydantic-settings）   横切层：类型安全的只读配置
 models（pydantic BaseModel）          横切层：数据契约与校验
@@ -354,8 +350,8 @@ logging（LoggerAdapter）              横切层：日志抽象，屏蔽具体�
 
 依赖原则：
 
-1. 上层只依赖下层的抽象 BaseVectorStore，不直接依赖 pymilvus 等 SDK
-2. 具体存储实现通过构造注入，即依赖反转，便于用 InMemoryVectorStore 做测试
+1. 上层只依赖存储接口（鸭子类型），不直接依赖 pymilvus 等 SDK
+2. 具体存储实现通过构造注入，即依赖反转，便于替换为测试替身
 3. 领域服务层只依赖 LoggerAdapter 抽象，不 import loguru 或 structlog
 4. config 为不可变且已校验的配置对象，逐层向下传递，禁止模块级全局可变状态
 5. 所有跨层数据以 pydantic 模型承载，边界处自动校验
@@ -363,7 +359,7 @@ logging（LoggerAdapter）              横切层：日志抽象，屏蔽具体�
 ### 11.2 数据模型（pydantic）
 
 ```python
-class MemoryRecord(BaseModel):
+class MilvusRecord(BaseModel):
     # extra=allow 支持继承与扩展：
     # 1. 子类可声明类型化字段，例如 user_id、tags
     # 2. 也可直接传入未声明字段，落入扩展字段集合
@@ -379,68 +375,24 @@ class MemoryRecord(BaseModel):
     @classmethod
     def _check_vector(cls, value: List[float]) -> List[float]: ...
 
-    @property
-    def extra_fields(self) -> Dict[str, Any]: ...
-
-    def to_row(self) -> Dict[str, Any]: ...
-
-
-class MilvusRecord(MemoryRecord):
-    """在基础字段之上掌握 Milvus 集合表结构的生成。"""
-
+    # 存储行编解码与建表同属本类
     @classmethod
-    def build_collection_schema(cls, pymilvus: MilvusModule, vector_dim: int) -> MilvusCollectionSchema: ...
-
-
-class QueryHit(BaseModel):
-    id: str = Field(min_length=1)
-    text_payload: str = Field(min_length=1)
-    score: float = Field(ge=0.0, le=1.0)
-    entities: List[str] = Field(default_factory=list)
-    created_at: float = Field(ge=0.0)
+    def build_collection_schema(cls, pymilvus: Any, vector_dim: int) -> Any: ...
 ```
 
 字段约定：
 
 | 模型 | 字段 |
 | :--- | :--- |
-| MemoryRecord（基础数据模型） | id、text_payload、vector、entities、created_at |
-| MilvusRecord（继承 MemoryRecord） | 同上，另含 build_collection_schema |
-| QueryHit | id、text_payload、score、entities、created_at |
-
-继承与扩展用法：
-
-```python
-# 方式一：子类声明类型化字段，获得校验与 IDE 提示
-class TenantRecord(MilvusRecord):
-    user_id: str
-    tags: List[str] = []
-
-# 方式二：直接传入未声明字段，无需定义子类
-record = MemoryRecord(id="m1", text_payload="t", vector=[0.1], created_at=1.0, user_id="u1")
-record.extra_fields   # {"user_id": "u1"}
-record.to_row()       # 含全部字段，供存储层落库
-```
-
-记录类切换：
-
-```python
-# 配置中指定，写入与读回共用该类
-{"models": {"record_class": "myapp.models.TenantRecord"}}
-
-from rag_data import resolve_record_class
-resolve_record_class("myapp.models.TenantRecord")
-```
+| MilvusRecord | id、text_payload、vector、entities、created_at；extra 允许，另含存储行编解码与 build_collection_schema |
 
 设计要点：
 
 1. 主键统一为 id，不再使用 memory_id；基类不再包含 user_id
 2. extra 设为 allow，基类约束收敛，扩展能力交给子类或运行时传入
-3. extra_fields 与 to_row 屏蔽扩展字段的具体名字，存储层无需硬编码
 4. 基类字段仍保留约束（非空、向量非空、时间戳非负），子类自动继承校验
 5. 原 extra=forbid 的拼写保护由测试覆盖，避免误传字段静默入库
-6. 记录类可通过配置 models.record_class 指定，写入与读回共用同一个类
-7. 建表权归属记录类：MilvusRecord.build_collection_schema 硬编码基础字段，子类可覆盖以自定义表结构
+6. 建表由 MilvusRecord.build_collection_schema 提供，硬编码基础字段
 
 ### 11.3 各模块职责与接口签名
 
@@ -450,18 +402,13 @@ resolve_record_class("myapp.models.TenantRecord")
 
 ```python
 class StorageSettings(BaseModel):
-    backend: Literal["memory", "milvus"] = "memory"
+    backend: str = "milvus"
     milvus_uri: str = "localhost:19530"
     milvus_db: str = "default"
     collection_name: str = "memory_store"
     vector_dim: int = Field(default=1024, gt=0)
     metric: Literal["COSINE", "L2", "IP"] = "COSINE"
     index_type: Literal["HNSW", "IVFLAT"] = "HNSW"
-
-
-class ModelSettings(BaseModel):
-    record_class: str = DEFAULT_RECORD_CLASS_PATH
-    promoted_fields: List[Dict[str, Any]] = []
 
 
 ENV_PREFIX = "RAG_"
@@ -477,7 +424,6 @@ class Settings(BaseSettings):
     )
 
     storage: StorageSettings = Field(default_factory=StorageSettings)
-    models: ModelSettings = Field(default_factory=ModelSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     nlp: NLPSettings = Field(default_factory=NLPSettings)
@@ -595,11 +541,11 @@ def get_logger(name: str) -> LoggerAdapter: ...
 
 ```python
 class IngestionPipeline:
-    def __init__(self, store, embedder, settings, logger, nlp=None, record_class=MemoryRecord): ...
+    def __init__(self, store, embedder, settings, logger, nlp=None): ...
 
     def run(self, paths: List[str], user_id: Optional[str] = None) -> int: ...
     def ingest_file(self, path: str, user_id: Optional[str] = None) -> int: ...
-    def _make_record(self, chunk: DocumentChunk) -> MemoryRecord: ...
+    def _make_record(self, chunk: DocumentChunk) -> MilvusRecord: ...
 
     @staticmethod
     def _content_hash(user_id: str, source_path: str, text: str) -> str: ...
@@ -691,7 +637,6 @@ def create_embedding_provider(name, settings, logger, **kwargs) -> BaseEmbedding
 | vector | FLOAT_VECTOR | HNSW 或 IVFLAT | 语义向量，维度取自配置 |
 | entities | ARRAY(VARCHAR) | Scalar Index | 实体列表，用于过滤；须声明 max_capacity 与元素级 max_length |
 | created_at | DOUBLE | Scalar Index | 创建或录入时间戳 |
-| metadata | JSON | None | 扩展字段容器 |
 
 已移除字段：memory_id（改名为 id）、user_id、last_accessed_at、recall_count。
 
@@ -699,91 +644,82 @@ def create_embedding_provider(name, settings, logger, **kwargs) -> BaseEmbedding
 
 | 名称 | 含义 |
 | :--- | :--- |
-| models.PRIMARY_FIELD | 主键字段名，值为 id |
-| models.METADATA_FIELD | 扩展字段容器名，值为 metadata |
-| models.BASE_FIELD_NAMES | metadata 之外的平铺列 |
-| milvus_store.SCALAR_INDEX_TYPES | 各字段的标量索引类型，可注入覆盖 |
-| milvus_store.VECTOR_INDEX_PARAMS | 各索引类型的默认构建参数，可经 register_vector_index_params 扩展 |
-| milvus_store.register_vector_index_params(index_type, params) | 登记或覆盖某索引类型的默认参数 |
-| milvus_store.build_vector_index_params(index_type, metric, params=None) | 生成向量索引参数；显式 params 优先，未登记类型留空交由 Milvus 采用默认 |
-| milvus_store.build_scalar_index_specs(field_names, index_types=None) | 生成标量索引配置；索引表可注入 |
+| milvus_store.BASE_FIELD_NAMES | 基础字段名，之外的一律视为扩展字段 |
+| milvus_store.SCALAR_INDEX_TYPES | 各字段的标量索引类型；未列出的字段不建标量索引 |
+| milvus_store.VECTOR_INDEX_PARAMS | 各索引类型的默认构建参数；未登记的类型由 Milvus 采用自身默认值 |
 
-记录类提供的存储行编解码（扩展字段的落库与还原）：
+记录类提供的存储行编解码：
 
 | 函数 | 作用 |
 | :--- | :--- |
-| record.to_storage_row(promoted) | 基类字段与提升列平铺，其余扩展字段写入 metadata |
-| Cls.from_storage_row(row, promoted) | 提升列与 metadata 一并还原为记录 |
-| Cls.flatten_row(row, promoted) | 存储行摊平为单层字典，供过滤复用 |
-| Cls.row_matches(row, filters, promoted) | 在存储行上做字段精确匹配 |
-| encode_metadata 与 decode_metadata | 扩展字段与 JSON 文本之间的双向转换 |
-| models.BASE_FIELD_NAMES | 平铺列字段名，用于区分扩展字段 |
+| record.to_storage_row() | 基础字段平铺，未声明字段不落库 |
+| Cls.from_storage_row(row) | 存储行还原为记录 |
 
 设计约定：
 
-1. 扩展字段默认只在 metadata 一处序列化，新增扩展字段无需改表结构
-2. 提升为独立列的扩展字段不再重复写入 metadata，避免同一字段存两份
-3. 编解码归属记录类（MemoryRecord 定义，MilvusRecord 继承），两个后端共用同一套行为
-4. 内存实现保存的是存储行而非 pydantic 对象，使单元测试真实覆盖序列化与还原
-5. 过滤在存储行层面进行，内存实现直接匹配字段，Milvus 实现转为 metadata 的 JSON 路径条件
+1. 扩展字段默认不落库；提升为独立列后才写入，新增字段无需改表结构
+2. 提升为独立列的扩展字段以物理列存储，写入时平铺
+3. 编解码归属 MilvusRecord 自身，存储实现按同一套行为完成写入与还原
+4. 测试替身保存的是存储行而非 pydantic 对象，使单元测试真实覆盖序列化与还原
 
-##### registry.py（存储后端注册表）
+##### store_registry.py（存储后端注册表）
 
-职责：以注册表解耦后端选择与装配代码，继承即注册，配置只写后端名。
+职责：以注册表解耦后端选择与装配代码，显式登记，配置只写后端名。
 
 ```python
 BUILTIN_BACKENDS: Dict[str, str] = {
-    "memory": "rag_data.storage.memory_store.InMemoryVectorStore",
     "milvus": "rag_data.storage.milvus_store.MilvusVectorStore",
 }
-BackendRef = Union[str, type]
+Ref = Union[str, type]
 
-def register_store(name: str, ref: BackendRef) -> None: ...   # ref 为类对象或点分路径
+def register_store(name: str, ref: Ref) -> None: ...      # ref 为类对象或点分路径
 def register_backend(name: str): ...                      # 装饰器
 def available_backends() -> List[str]: ...
 def is_registered(name: str) -> bool: ...
-def resolve_store(name: str) -> Type[BaseVectorStore]: ...
-def create_store(name, settings, logger, **kwargs) -> BaseVectorStore: ...
+def resolve_store(name: str) -> Type[Any]: ...
+def load_store_modules(refs: Sequence[str]) -> None: ...  # 导入用户模块，导入即登记
+def create_store(name, settings, logger, **kwargs) -> Any: ...
 ```
 
 设计约定：
 
-1. BaseVectorStore.__init_subclass__ 检测子类的 backend 属性并自动注册，无需额外调用
+1. 后端以点分路径或类对象显式登记，实现类无需继承基类
 2. 类对象直接入表，避免本地类因 qualname 无法按路径导入；字符串则惰性导入
 3. 内置后端以点分路径注册，实现惰性导入，未装 pymilvus 时仍可正常导入 rag_data
 4. 未注册的后端名抛 ConfigError，并在信息中列出可用后端
 5. 创建实例统一以关键字传入 settings 与 logger，各实现保持一致签名
+6. 用户可以模块形式扩充后端：storage.store_modules 列出点分路径或 .py 文件，
+   模块在导入期调用 register_store 登记，create_store 装配前按需导入且幂等
 
 
-##### base.py
+##### 存储接口（无基类）
 
-职责：定义存储层抽象接口，隔离具体向量库实现。
+存储实现为独立类，无需继承任何基类，只需约定一致的方法签名：
 
 ```python
-class BaseVectorStore(ABC, Generic[RecordT]):
+class MilvusVectorStore:          # Milvus 实现
+
     def ensure_collection(self) -> None: ...
-    def upsert(self, records: List[RecordT]) -> int: ...
-    def query(self, vector, top_n, filters=None) -> List[QueryHit]: ...
+    def upsert(self, records) -> int: ...
     def close(self) -> None: ...
 ```
 
 接口契约：
 
 1. upsert 按 id 幂等覆盖，返回实际写入条数；扩展字段一并落库
-2. query 的 filters 为字段精确匹配，键可指向基类字段、提升列或扩展字段
-3. query 返回按向量相似度降序的候选，score 归一化到 0 到 1，先过滤再排序
-4. 入参与出参均为 pydantic 模型，避免裸字典漂移
+2. 入参与出参均为 pydantic 模型，避免裸字典漂移
+3. 新增后端只需实现类并用 register_store 登记，或经 storage.store_modules 提供模块；装配代码不变
 
-已移除方法：update_scalar（原为召回反馈回写而设）。
+已移除：查询（query）能力与对应基类。
 
 ##### models.build_collection_schema（建表入口）
 
 建表权由记录类掌握，MilvusRecord 默认硬编码声明的字段：
 
 ```python
-class MilvusRecord(MemoryRecord):
+class MilvusRecord(BaseModel):
     @classmethod
-    def build_collection_schema(cls, pymilvus: MilvusModule, vector_dim: int) -> MilvusCollectionSchema:
+    def build_collection_schema(cls, pymilvus: Any, vector_dim: int) -> Any:
         """按声明的字段硬编码创建集合表结构。"""
         ...
         return pymilvus.CollectionSchema(fields=fields, description=...)
@@ -807,70 +743,49 @@ class TenantRecord(MilvusRecord):
 设计要点：
 
 1. pymilvus 由调用方传入，模型层不依赖可选第三方库
-2. 硬编码字段与 models.BASE_FIELD_NAMES 一一对应，一致性由测试锁定
+2. 硬编码字段与 milvus_store.BASE_FIELD_NAMES 一一对应，一致性由测试锁定
 3. 维度非法时抛 ConfigError，避免生成无效表结构
 4. Milvus 侧仅负责调用记录类建表；索引参数与标量索引表定义在 milvus_store
 
 ##### milvus_store.py
 
 ```python
-class MilvusVectorStore(BaseVectorStore[MilvusRecord]):
-    def __init__(self, settings, logger, record_class=None, alias="rag_data"): ...
+class MilvusVectorStore:
+    def __init__(self, settings, logger, alias="rag_data"): ...
 
     def column_names(self) -> List[str]: ...
-    def promoted_columns(self) -> List[str]: ...
     def vector_index_params(self) -> Dict[str, Any]: ...
-    def scalar_index_specs(self) -> List[ScalarIndexSpec]: ...
+    def scalar_index_specs(self) -> List[Tuple[str, Dict[str, Any]]]: ...
 
     def ensure_collection(self) -> None: ...
     def upsert(self, records: List[MilvusRecord]) -> int: ...
-    def query(self, vector, top_n, filters=None) -> List[QueryHit]: ...
 ```
 
 建表流程（已实现）：
 
 1. 惰性连接：首次调用时按 settings.storage.milvus_uri 与 milvus_db 连接并缓存，库名随连接生效
-2. 集合不存在：调用记录类的 build_collection_schema 生成 schema，
-   追加配置声明的提升列，再建表、建向量索引与标量索引，最后 load
-3. 集合已存在：跳过建表，校验既有向量维度与配置一致，不一致抛 SchemaMismatchError
+2. 集合不存在：调用 MilvusRecord.build_collection_schema 生成 schema，再建表、建向量索引与标量索引，最后 load
+3. 集合已存在：跳过建表，直接 load
 4. 向量索引：index_type 与 metric 取自配置，HNSW 使用 M 与 efConstruction
 5. 标量索引：entities 用 INVERTED，created_at 用 STL_SORT
-6. 写入：metadata 由 JSON 文本转为字典后提交，按 batch_size 分批，最后 flush
+6. 写入：记录转存储行后按 batch_size 分批提交，最后 flush
 7. 未安装 pymilvus：抛 OptionalDependencyError 并给出安装指引
 
-列名解析（支持子类覆盖建表）：
+列名解析：未建表时为 BASE_FIELD_NAMES，已建表时取集合实际字段。
 
-| 场景 | column_names 来源 |
-| :--- | :--- |
-| 未建表 | models.BASE_FIELD_NAMES 加配置提升列 |
-| 已建表 | 集合实际字段（剔除 metadata），可识别子类新增列 |
-
-promoted_columns 返回除基类字段外的平铺列，用于决定哪些扩展字段平铺写入、
-哪些进 metadata，以及检索时需要回传的字段。
-
-扩展字段落库策略：
-
-| 场景 | 落库位置 | 说明 |
-| :--- | :--- | :--- |
-| 普通扩展字段 | metadata JSON 列 | 表结构不变，新增字段无需改表 |
-| 子类建表新增的列 | 独立物理列 | 建表后自动识别，写入时平铺 |
-| 配置提升的列 | 独立物理列 | 可建标量索引，且不再重复写入 metadata |
-
-TODO：过滤表达式的字符串转义需补强注入防护。
 
 ### 11.4 关键调用链
 
 离线导入链路（唯一链路），全链路以 pydantic 模型传递并伴随日志埋点：
 
 ```text
-parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.encode  ->  构造 MemoryRecord 校验  ->  store.upsert
+parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.encode  ->  构造 MilvusRecord 校验  ->  store.upsert
 ```
 
 横切能力在链路两端生效：
 
 - 入参：Settings 已完成校验，LoggerAdapter 已就绪
-- 出参：MemoryRecord 与 QueryHit 均为已校验模型
-- 扩展：MemoryRecord 的扩展字段经 extra_fields 透传，由存储层决定落库方式
+- 出参：MilvusRecord 为已校验模型
 
 ### 11.5 异常与错误处理
 
@@ -880,7 +795,6 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 | OptionalDependencyError | 可选框架或解析库未安装 | 给出安装指引，日志层降级到 stdlib |
 | ParserDependencyError | 解析依赖未安装 | 给出安装指引 |
 | ParseError | 文档损坏或格式不支持 | 跳过该文件并累计失败清单 |
-| SchemaMismatchError | 向量维度或字段不符 | 拒绝写入或建表并提示重建集合 |
 | StoreError | 向量库连接或读写失败 | 有限次重试后抛出 |
 | EmbeddingError | 向量化服务失败 | 批次重试，仍失败则中断该批次 |
 
@@ -918,21 +832,19 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 
 | 测试文件 | 覆盖对象 | 关键用例 |
 | :--- | :--- | :--- |
-| test_models.py | pydantic 模型 | 字段约束、取值边界、id 主键、已移除字段缺席、extra 扩展、子类继承校验 |
+| test_models.py | pydantic 模型 | DocumentChunk 约束与冻结、字段常量 |
 | test_config.py | Settings | 默认值、环境变量覆盖、代码硬编码优先、分区名校验、Literal 与区间校验 |
 | test_logging.py | LoggerAdapter | 三后端参数化输出、bind 与 context、auto 探测与回退 |
 | test_chunking.py | build_semantic_chunks | 空文本、单句、恰好等于上限、跨块重叠、超长单句 |
 | test_entities.py | extract_entities | 去重、大小写归一、空文本 |
 | test_embedder.py | Embedder | 批次切分、维度校验、假模型注入 |
 | test_embedding_provider.py | 嵌入模型注册表 | 内置 provider、继承即注册、配置解析、API Key 来源、请求构造、响应解析、错误包装、配置驱动切换、批量上限 |
-| test_storage_row.py | 存储行编解码 | 字段划分、metadata、往返、提升列、过滤 |
-| test_store_contract.py | BaseVectorStore | 以 InMemoryVectorStore 跑接口契约、按 id 幂等、filters 过滤基类与扩展字段 |
+| test_storage_row.py | 存储行编解码 | 平铺列、往返、未声明字段不落库 |
 | test_pipeline.py | IngestionPipeline | 端到端导入、幂等、分批切分 |
 | test_public_api.py | 公共入口 | 版本、__all__ 可解析、核心符号可从包根获取、端到端 |
-| test_record_class.py | 记录类路径解析 | 配置分区、点分路径解析、非法路径报错、配置驱动的写入与读回 |
 | test_facade.py | 流程门面 | 各流程装配、一键调用、上下文管理、依赖注入 |
-| test_store_registry.py | 存储后端注册表 | 内置后端、继承即注册、重复名覆盖、路径与类对象注册、未知后端报错、配置驱动切换 |
-| test_milvus_mapping.py | Milvus 建表与映射 | 表结构生成、维度注入、数组规范化、提升列、索引参数、建表幂等、维度校验、分批写入 |
+| test_store_registry.py | 存储后端注册表 | 内置后端、显式登记、路径与类对象注册、未知后端报错、配置驱动切换、用户模块导入 |
+| test_milvus_mapping.py | Milvus 建表与映射 | 表结构生成、维度注入、数组规范化、索引参数、建表幂等、分批写入 |
 
 ### 11.9 公共入口（Public API）
 
@@ -940,19 +852,19 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 
 ```python
 import rag_data
-from rag_data import Settings, RagData, InMemoryVectorStore
+from rag_data import Settings, RagData
 ```
 
 | 分组 | 导出符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | Settings、StorageSettings、ModelSettings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides |
-| 数据模型 | DocumentChunk、MemoryRecord、MilvusRecord、QueryHit、resolve_record_class、DEFAULT_RECORD_CLASS_PATH |
+| 配置 | Settings、StorageSettings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides |
+| 数据模型 | DocumentChunk、MilvusRecord |
 | 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
-| 存储 | BaseVectorStore、InMemoryVectorStore、register_store、register_backend、available_backends、is_registered、resolve_store、create_store |
+| 存储 | register_store、register_backend、available_backends、is_registered、resolve_store、create_store、load_store_modules、BUILTIN_BACKENDS |
 | 日志适配 | LoggerAdapter、configure_logging、get_logger |
-| 流程门面 | RagData、init_collection、ingest、build_settings、build_logger、build_store、build_nlp、build_embedder、build_pipeline、build_record_class、DEFAULT_TOP_N |
+| 流程门面 | RagData、init_collection、ingest、build_settings、build_logger、build_store、build_nlp、build_embedder、build_pipeline |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、SchemaMismatchError、StoreError、EmbeddingError |
 
 设计约定：
@@ -973,7 +885,6 @@ app = RagData.create()      # 装配配置、日志、存储、向量化、管�
 app.init_collection()       # 流程：建集合
 app.ingest(paths, user_id)  # 流程：批量导入
 app.ingest_file(path)       # 流程：导入单文件
-app.query(vector, top_n)    # 流程：按向量检索
 app.close()                 # 流程：释放资源
 ```
 
@@ -983,8 +894,7 @@ app.close()                 # 流程：释放资源
 | :--- | :--- |
 | build_settings(source) | 加载配置，支持整体字典与分区硬编码 |
 | build_logger(settings) | 装配日志适配层 |
-| build_record_class(settings) | 解析 settings.models.record_class |
-| build_store(settings, logger, record_class) | 按 storage.backend 装配向量库，milvus 惰性导入 |
+| build_store(settings, logger) | 按 storage.backend 装配向量库，milvus 惰性导入 |
 | build_nlp(settings, logger) | 加载 spaCy 句柄，缺失或失败时降级为 None |
 | build_embedder(settings, logger, model) | 装配向量化组件，provider 由配置决定 |
 | build_pipeline(...) | 装配导入管道 |
@@ -994,10 +904,9 @@ app.close()                 # 流程：释放资源
 设计约定：
 
 1. 门面只做流程装配与转发，不重复实现业务逻辑，真实逻辑仍在各子包
-2. RagData 支持依赖注入，store、embedder、logger、nlp、record_class 均可外部替换，便于测试
+2. RagData 支持依赖注入，store、embedder、logger、nlp 均可外部替换，便于测试
 3. 支持上下文管理，with 退出时自动 close
 4. 可选依赖（pymilvus、spaCy）一律惰性导入并降级，保证门面在最小依赖环境可用
-5. user_id 与 filters 由门面透传到管道与存储，支持按扩展字段过滤
 
 ## 12. 编码规范与工程约定
 

@@ -3,7 +3,7 @@
 # 外部调用只需引入本包，无需关心内部子包路径：
 #
 #   import rag_data
-#   from rag_data import Settings, IngestionPipeline, InMemoryVectorStore
+#   from rag_data import Settings, IngestionPipeline
 #
 # 本文件仅做统一导出，不承载任何业务逻辑；内部实现仍按模块分布在各自子包中。
 
@@ -43,13 +43,11 @@ from rag_data.exceptions import (
     StoreError,
 )
 from rag_data.facade import (
-    DEFAULT_TOP_N,
     RagData,
     build_embedder,
     build_logger,
     build_nlp,
     build_pipeline,
-    build_record_class,
     build_settings,
     build_store,
     ingest,
@@ -61,24 +59,14 @@ from rag_data.ingestion.parsers import parse_document
 from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging, get_logger
-from rag_data.models import (
-    DEFAULT_RECORD_CLASS_PATH,
-    DocumentChunk,
-    MemoryRecord,
-    MilvusCollectionSchema,
-    MilvusDataType,
-    MilvusFieldSchema,
-    MilvusModule,
-    MilvusRecord,
-    QueryHit,
-    resolve_record_class,
-)
-from rag_data.storage.base import BaseVectorStore
-from rag_data.storage.memory_store import InMemoryVectorStore
-from rag_data.storage.registry import (
+from rag_data.models import DocumentChunk
+from rag_data.storage.milvus_store import MilvusRecord
+from rag_data.store_registry import (
+    BUILTIN_BACKENDS,
     available_backends,
     create_store,
     is_registered,
+    load_store_modules,
     register_backend,
     register_store,
     resolve_store,
@@ -98,11 +86,9 @@ __all__ = [
     "build_settings",
     "build_logger",
     "build_store",
-    "build_record_class",
     "build_nlp",
     "build_embedder",
     "build_pipeline",
-    "DEFAULT_TOP_N",
     # 版本
     "__version__",
     # 配置
@@ -117,15 +103,7 @@ __all__ = [
     "ENV_NESTED_DELIMITER",
     # 数据模型
     "DocumentChunk",
-    "MemoryRecord",
     "MilvusRecord",
-    "MilvusModule",
-    "MilvusCollectionSchema",
-    "MilvusFieldSchema",
-    "MilvusDataType",
-    "resolve_record_class",
-    "DEFAULT_RECORD_CLASS_PATH",
-    "QueryHit",
     # 导入管道
     "IngestionPipeline",
     "parse_document",
@@ -143,14 +121,14 @@ __all__ = [
     "resolve_embedding_provider",
     "create_embedding_provider",
     # 存储
-    "BaseVectorStore",
-    "InMemoryVectorStore",
     "register_store",
     "register_backend",
     "available_backends",
     "is_registered",
     "resolve_store",
     "create_store",
+    "load_store_modules",
+    "BUILTIN_BACKENDS",
     # 日志适配层
     "LoggerAdapter",
     "configure_logging",

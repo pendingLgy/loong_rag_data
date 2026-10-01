@@ -5,13 +5,10 @@ import os
 import pytest
 
 import rag_data
+from fake_store import FakeStore
 from rag_data import (
-    BaseVectorStore,
     Embedder,
-    InMemoryVectorStore,
     IngestionPipeline,
-    MemoryRecord,
-    QueryHit,
     Settings,
     configure_logging,
     get_logger,
@@ -35,8 +32,6 @@ def test_all_has_no_duplicates():
 def test_core_symbols_available_from_package_root():
     assert Settings is rag_data.Settings
     assert IngestionPipeline is rag_data.IngestionPipeline
-    assert InMemoryVectorStore is rag_data.InMemoryVectorStore
-    assert issubclass(InMemoryVectorStore, BaseVectorStore)
     assert callable(configure_logging) and callable(get_logger)
 
 
@@ -51,16 +46,13 @@ def test_public_api_end_to_end(tmp_path, logger):
         def encode(self, texts):
             return [[0.1] * settings.storage.vector_dim for _ in texts]
 
-    store = InMemoryVectorStore()
+    store = FakeStore()
     embedder = Embedder(settings, logger, model=_FakeModel())
     pipeline = IngestionPipeline(store, embedder, settings, logger)
     written = pipeline.run([path])
 
     assert written > 0
     assert store.count() == written
-
-    hits = store.query([0.1] * settings.storage.vector_dim, top_n=3)
-    assert hits and all(isinstance(hit, QueryHit) for hit in hits)
 
 
 def test_exceptions_are_exported():

@@ -34,8 +34,7 @@ from typing import Dict
 
 import pytest
 
-from rag_data import QueryHit, RagData, Settings
-from rag_data.storage.memory_store import cosine_similarity
+from rag_data import RagData, Settings
 
 # 凭据与连接信息一律来自运行时环境变量，代码中不写默认密钥。
 MILVUS_URI = os.environ.get("RAG_IT_MILVUS_URI", "http://127.0.0.1:19530")
@@ -52,6 +51,20 @@ VECTOR_DIM = int(os.environ.get("RAG_IT_DIM", "1024"))
 QWEN_MAX_BATCH = 10
 # 只允许删除该前缀的集合。
 COLLECTION_PREFIX = "rag_data_it"
+
+
+def _cosine_similarity(left, right):
+    """本地余弦相似度，仅用于比较嵌入向量的语义接近程度。"""
+    size = min(len(left), len(right))
+    if size == 0:
+        return 0.0
+    dot = sum(left[i] * right[i] for i in range(size))
+    norm_left = sum(left[i] * left[i] for i in range(size)) ** 0.5
+    norm_right = sum(right[i] * right[i] for i in range(size)) ** 0.5
+    if norm_left == 0.0 or norm_right == 0.0:
+        return 0.0
+    return dot / (norm_left * norm_right)
+
 
 requires_api_key = pytest.mark.skipif(
     not API_KEY,
@@ -95,7 +108,7 @@ def it_settings() -> Settings:
 @pytest.fixture(scope="module")
 def app(it_settings) -> RagData:
     """装配真实门面：真实 Qwen 嵌入加真实 Milvus；nlp 置空走回退实现。"""
-    # 建集会走记录类的 build_collection_schema；维度需与嵌入输出一致。
+    # 建集会走 MilvusRecord.build_collection_schema；维度需与嵌入输出一致。
     instance = RagData(it_settings, nlp=None)
     instance.init_collection()
     yield instance
@@ -105,7 +118,7 @@ def app(it_settings) -> RagData:
 
 @pytest.fixture(scope="module")
 def docs(tmp_path_factory) -> Dict[str, str]:
-    """两个租户各一份文档，用于验证写入与按扩展字段过滤。"""
+    """两个租户各一份文档，用于验证写入与按独立列过滤。"""
     directory = tmp_path_factory.mktemp("qwen_it")
     contents = {
         "tenant_a": "Milvus 是向量数据库，支持相似度检索。向量数据库用于存储嵌入向量。",
@@ -157,53 +170,12 @@ def test_related_text_is_more_similar(app):
     query, related, unrelated = app.embedder.encode(
         ["向量数据库", "Milvus 是向量数据库", "今天天气不错"]
     )
-    assert cosine_similarity(query, related) > cosine_similarity(query, unrelated)
+    assert _cosine_similarity(query, related) > _cosine_similarity(query, unrelated)
 
 
-# ---------------- 写入与检索 ----------------
+# ---------------- 写入 ----------------
 
 
 def test_ingest_writes_chunks(app, docs):
     written = app.ingest([docs["tenant_a"]], user_id="tenant-a")
     assert written > 0
-
-
-def test_query_returns_most_relevant_first(app, docs):
-    app.ingest([docs["tenant_a"]], user_id="tenant-a")
-    hits = app.query(app.embedder.encode(["向量数据库"])[0], top_n=3)
-    assert hits
-    assert all(isinstance(hit, QueryHit) for hit in hits)
-    scores = [hit.score for hit in hits]
-    assert scores == sorted(scores, reverse=True)
-    assert all(0.0 <= score <= 1.0 for score in scores)
-    assert "向量" in hits[0].text_payload
-
-
-def test_filter_isolates_tenant(app, docs):
-    app.ingest([docs["tenant_a"]], user_id="tenant-a")
-    app.ingest([docs["tenant_b"]], user_id="tenant-b")
-    vector = app.embedder.encode(["向量数据库"])[0]
-    hits = app.query(vector, top_n=5, filters={"user_id": "tenant-a"})
-    assert hits
-    # user_id 未提升为独立列，Milvus 侧走 metadata 的 JSON 路径过滤
-    assert all("天气" not in hit.text_payload for hit in hits)
-
-
-def test_hit_fields_are_complete(app, docs):
-    app.ingest([docs["tenant_a"]], user_id="tenant-a")
-    hit = app.query(app.embedder.encode(["向量数据库"])[0], top_n=1)[0]
-    assert isinstance(hit.id, str) and hit.id
-    assert isinstance(hit.text_payload, str) and hit.text_payload
-    assert isinstance(hit.entities, list)
-    assert isinstance(hit.created_at, float)
-
-
-def test_reingest_is_idempotent(app, docs):
-    """同一份文档重复导入不应产生重复记录：主键由内容哈希决定。"""
-    first = app.ingest([docs["tenant_a"]], user_id="tenant-a")
-    app.ingest([docs["tenant_a"]], user_id="tenant-a")
-    vector = app.embedder.encode(["向量数据库"])[0]
-    hits = app.query(vector, top_n=50, filters={"user_id": "tenant-a"})
-    ids = [hit.id for hit in hits]
-    assert len(ids) == len(set(ids))
-    assert len(ids) == first

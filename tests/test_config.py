@@ -32,7 +32,7 @@ def test_module_defaults():
     assert config.storage.vector_dim == 1024
     assert config.storage.metric == "COSINE"
     assert config.storage.index_type == "HNSW"
-    assert config.storage.backend == "memory"
+    assert config.storage.backend == "milvus"
     assert config.chunking.max_chars == 250
     assert config.chunking.overlap_sents == 1
     assert config.embedding.batch_size == 128
@@ -60,7 +60,7 @@ def test_logging_json_alias_is_accepted():
 
 
 def test_section_models_exist():
-    assert StorageSettings().backend == "memory"
+    assert StorageSettings().backend == "milvus"
     assert ChunkingSettings().max_chars == 250
     assert EmbeddingSettings().batch_size == 128
     assert LoggingSettings().level == "INFO"
@@ -74,7 +74,6 @@ def test_unknown_section_field_is_rejected():
 def test_invalid_value_is_rejected():
     with pytest.raises(Exception):
         ChunkingSettings(max_chars=10)
-
 
 
 @requires_pydantic_settings
@@ -110,10 +109,9 @@ def test_load_env_overrides_skips_non_config_keys():
 
 
 def test_load_env_overrides_parses_json_values():
-    value = '[{"name": "user_id", "type": "VARCHAR"}]'
-    env = {"RAG_MODELS__PROMOTED_FIELDS": value}
+    env = {"RAG_DEMO__ITEMS": "[1, 2]"}
     data = load_env_overrides(env)
-    assert data["models"]["promoted_fields"] == [{"name": "user_id", "type": "VARCHAR"}]
+    assert data["demo"]["items"] == [1, 2]
 
 
 def test_load_reads_environment_by_default(monkeypatch):
@@ -164,19 +162,19 @@ def test_load_use_env_false_ignores_environment(monkeypatch):
 
     # use_env=False 时忽略环境变量，字段回落到默认值
     config = Settings.load(use_env=False)
-    assert config.storage.backend == "memory"
+    assert config.storage.backend == "milvus"
     assert config.storage.vector_dim == 1024
     assert config.logging.level == "INFO"
 
     # 关闭环境变量只影响环境来源，显式给出的配置照常生效
     hardcoded = Settings.load(use_env=False, storage={"vector_dim": 512})
     assert hardcoded.storage.vector_dim == 512
-    assert hardcoded.storage.backend == "memory"
+    assert hardcoded.storage.backend == "milvus"
 
 
 def test_load_ignores_unrelated_env_prefix(monkeypatch):
     monkeypatch.setenv("RAG_UNRELATED", "1")
-    assert Settings.load().storage.backend == "memory"
+    assert Settings.load().storage.backend == "milvus"
 
 
 def test_load_invalid_env_value_raises(monkeypatch):
@@ -227,6 +225,6 @@ def test_build_settings_accepts_overrides():
 
 
 def test_ragdata_create_accepts_overrides(logger):
-    app = RagData.create(overrides={"storage": {"backend": "memory"}}, logger=logger, nlp=None)
-    assert app.settings.storage.backend == "memory"
+    app = RagData.create(overrides={"storage": {"backend": "milvus"}}, logger=logger, nlp=None)
+    assert app.settings.storage.backend == "milvus"
 
