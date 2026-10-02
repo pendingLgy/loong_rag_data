@@ -146,7 +146,7 @@ def test_config_defaults_to_openai():
     config = Settings()
     assert config.embedding.provider == "openai"
     assert config.embedding.model == ""
-    assert config.embedding.dim == 0
+    assert config.embedding.dim == 1024
     assert config.embedding.api_key == ""
     assert config.embedding.base_url == ""
     assert config.embedding.batch_size == 128
@@ -199,7 +199,7 @@ def test_api_key_missing_raises(logger, monkeypatch):
 
 
 def test_payload_uses_default_model(logger):
-    provider = _RecordingProvider(Settings(embedding={"api_key": "k"}), logger)
+    provider = _RecordingProvider(Settings(embedding={"api_key": "k", "dim": 1536}), logger)
     provider.encode(["a", "b"])
     url, payload = provider.requests[0]
     assert url.endswith("/embeddings")
@@ -265,7 +265,7 @@ def test_embedder_uses_openai_by_default(logger, monkeypatch):
         return {"data": [{"index": 0, "embedding": [0.1] * 4}]}
 
     monkeypatch.setattr(OpenAIEmbeddingProvider, "_post_json", fake_post)
-    settings = Settings(storage={"vector_dim": 4}, embedding={"api_key": "k"})
+    settings = Settings(embedding={"dim": 4, "api_key": "k"})
     assert len(Embedder(settings, logger).encode(["a"])) == 1
     assert seen["model"] == "text-embedding-3-small"
     assert "api.openai.com" in seen["url"]
@@ -280,10 +280,7 @@ def test_embedder_uses_qwen_when_configured(logger, monkeypatch):
         return {"data": [{"index": 0, "embedding": [0.1] * 4}]}
 
     monkeypatch.setattr(QwenEmbeddingProvider, "_post_json", fake_post)
-    settings = Settings(
-        storage={"vector_dim": 4},
-        embedding={"provider": "qwen", "api_key": "k"},
-    )
+    settings = Settings(embedding={"dim": 4, "provider": "qwen", "api_key": "k"})
     Embedder(settings, logger).encode(["a"])
     assert seen["model"] == QwenEmbeddingProvider.default_model
     # 端点取自 provider 自述的 base_url，不锁死具体域名。
@@ -291,7 +288,7 @@ def test_embedder_uses_qwen_when_configured(logger, monkeypatch):
 
 
 def test_embedder_honors_provider_batch_limit(logger, batchy):
-    settings = Settings(storage={"vector_dim": 4}, embedding={"provider": batchy, "api_key": "k", "batch_size": 10})
+    settings = Settings(embedding={"dim": 4, "provider": batchy, "api_key": "k", "batch_size": 10})
     embedder = Embedder(settings, logger)
     assert len(embedder.encode(["1", "2", "3", "4", "5"])) == 5
     # provider 单次上限为 2，故 5 条被切成 2 + 2 + 1
@@ -299,18 +296,18 @@ def test_embedder_honors_provider_batch_limit(logger, batchy):
 
 
 def test_embedder_injected_model_wins_over_provider(logger):
-    settings = Settings(storage={"vector_dim": 3}, embedding={"provider": "qwen"})
+    settings = Settings(embedding={"dim": 3, "provider": "qwen"})
     embedder = Embedder(settings, logger, model=_FakeModel(3))
     assert len(embedder.encode(["a"])[0]) == 3
 
 
 def test_embedder_validates_dimension(logger, batchy):
-    # batchy 输出 4 维，与 storage.vector_dim 不一致时应报错
-    settings = Settings(storage={"vector_dim": 3}, embedding={"provider": batchy, "api_key": "k"})
+    # batchy 输出 4 维，与 embedding.dim 不一致时应报错
+    settings = Settings(embedding={"dim": 3, "provider": batchy, "api_key": "k"})
     with pytest.raises(EmbeddingError):
         Embedder(settings, logger).encode(["a"])
 
 
 def test_embedder_empty_input_skips_provider(logger):
-    settings = Settings(storage={"vector_dim": 3}, embedding={"provider": "missing"})
+    settings = Settings(embedding={"dim": 3, "provider": "missing"})
     assert Embedder(settings, logger).encode([]) == []

@@ -9,7 +9,7 @@ description = "历史文本数据导入与向量化管道"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
-keywords = ["rag", "vector", "embedding", "milvus"]
+keywords = ["rag", "vector", "embedding"]
 authors = [
   { name = "loong", email = "amzinglgy@gmail.com" },
 ]
@@ -31,8 +31,6 @@ dependencies = [
 [project.optional-dependencies]
 parsers = ["unstructured>=0.12", "spacy>=3.7"]
 embedding = ["sentence-transformers>=2.5"]
-milvus = ["pymilvus>=2.3"]
-qdrant = ["qdrant-client>=1.7"]
 loguru = ["loguru>=0.7"]
 structlog = ["structlog>=24.1"]
 dev = [
@@ -49,6 +47,10 @@ Source = "https://github.com/loong/rag-data"
 
 [tool.hatch.envs.default]
 features = [
+  "parsers",
+  "embedding",
+  "loguru",
+  "structlog",
   "dev",
 ]
 
@@ -63,8 +65,6 @@ format = "ruff format src tests"
 features = [
   "parsers",
   "embedding",
-  "milvus",
-  "qdrant",
   "loguru",
   "structlog",
   "dev",
@@ -85,7 +85,7 @@ packages = ["src/rag_data"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-#addopts = "-q -m 'not integration'"
+addopts = "-q -m 'not integration'"
 markers = [
   "slow: 需要外部服务的集成测试，默认跳过",
   "integration: 真实调用外部服务的手工集成测试，默认跳过",

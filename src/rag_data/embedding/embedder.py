@@ -65,8 +65,8 @@ class Embedder:
         return [list(map(float, row)) for row in result]
 
     def _validate_dim(self, vectors: List[List[float]]) -> None:
-        """校验向量维度与 storage.vector_dim 一致，避免写入集合时不匹配。"""
-        expected = self._settings.storage.vector_dim
+        """校验向量维度与 embedding.dim 一致，避免下游按错误维度使用。"""
+        expected = self._settings.embedding.dim
         for vector in vectors:
             if len(vector) != expected:
                 raise EmbeddingError(

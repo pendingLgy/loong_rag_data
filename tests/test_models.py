@@ -1,14 +1,20 @@
-# 数据模型单元测试：DocumentChunk 与字段常量。
+# 数据模型单元测试：DocumentChunk 及其向量字段。
 
 import pytest
 from pydantic import ValidationError
 
 from rag_data.models import DocumentChunk
-from rag_data.storage.milvus_store import BASE_FIELD_NAMES, VECTOR_FIELD
+
+
+def _chunk(vector=None):
+    fields = dict(chunk_id="c1", user_id="u1", source_path="a.md", text="t", created_at=0.0)
+    if vector is not None:
+        fields["vector"] = vector
+    return DocumentChunk(**fields)
 
 
 def test_document_chunk_is_frozen():
-    chunk = DocumentChunk(chunk_id="c1", user_id="u1", source_path="a.md", text="t", created_at=0.0)
+    chunk = _chunk()
     with pytest.raises(ValidationError):
         chunk.text = "x"
 
@@ -18,6 +24,15 @@ def test_document_chunk_requires_fields():
         DocumentChunk(chunk_id="c1", user_id="u1", source_path="a.md")
 
 
-def test_base_field_names_cover_record_columns():
-    assert list(BASE_FIELD_NAMES) == ["id", "text_payload", "vector", "entities", "created_at"]
-    assert VECTOR_FIELD in BASE_FIELD_NAMES
+def test_vector_defaults_to_empty():
+    assert _chunk().vector == []
+
+
+def test_vector_is_a_plain_field():
+    assert _chunk(vector=[0.1, 0.2]).vector == [0.1, 0.2]
+
+
+def test_vector_can_be_bound_with_model_copy():
+    bound = _chunk().model_copy(update={"vector": [0.3, 0.4]})
+    assert bound.vector == [0.3, 0.4]
+    assert bound.chunk_id == "c1"

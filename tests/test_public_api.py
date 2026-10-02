@@ -2,10 +2,7 @@
 
 import os
 
-import pytest
-
 import rag_data
-from fake_store import FakeStore
 from rag_data import (
     Embedder,
     IngestionPipeline,
@@ -44,17 +41,22 @@ def test_public_api_end_to_end(tmp_path, logger):
 
     class _FakeModel:
         def encode(self, texts):
-            return [[0.1] * settings.storage.vector_dim for _ in texts]
+            return [[0.1] * settings.embedding.dim for _ in texts]
 
-    store = FakeStore()
     embedder = Embedder(settings, logger, model=_FakeModel())
-    pipeline = IngestionPipeline(store, embedder, settings, logger)
-    written = pipeline.run([path])
+    pipeline = IngestionPipeline(embedder, settings, logger)
+    embedded = pipeline.run([path])
 
-    assert written > 0
-    assert store.count() == written
+    assert len(embedded) > 0
+    assert all(len(item.vector) == settings.embedding.dim for item in embedded)
+
+
+def test_storage_layer_is_removed():
+    # 存储层已整体移除，公共入口不应再暴露相关符号。
+    for name in ("build_store", "init_collection", "MilvusRecord", "StorageSettings", "register_store"):
+        assert not hasattr(rag_data, name)
 
 
 def test_exceptions_are_exported():
-    for name in ("RagDataError", "ConfigError", "DataError", "StoreError", "EmbeddingError"):
+    for name in ("RagDataError", "ConfigError", "DataError", "EmbeddingError"):
         assert issubclass(getattr(rag_data, name), Exception)

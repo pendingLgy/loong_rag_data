@@ -7,7 +7,6 @@ from rag_data.config import (
     EmbeddingSettings,
     LoggingSettings,
     Settings,
-    StorageSettings,
     load_env_overrides,
 )
 from rag_data import RagData, build_settings
@@ -29,10 +28,8 @@ requires_pydantic_settings = pytest.mark.skipif(
 
 def test_module_defaults():
     config = Settings()
-    assert config.storage.vector_dim == 1024
-    assert config.storage.metric == "COSINE"
-    assert config.storage.index_type == "HNSW"
-    assert config.storage.backend == "milvus"
+    assert config.embedding.dim == 1024
+    assert config.embedding.provider == "openai"
     assert config.chunking.max_chars == 250
     assert config.chunking.overlap_sents == 1
     assert config.embedding.batch_size == 128
@@ -60,7 +57,7 @@ def test_logging_json_alias_is_accepted():
 
 
 def test_section_models_exist():
-    assert StorageSettings().backend == "milvus"
+    assert EmbeddingSettings().dim == 1024
     assert ChunkingSettings().max_chars == 250
     assert EmbeddingSettings().batch_size == 128
     assert LoggingSettings().level == "INFO"
@@ -78,8 +75,8 @@ def test_invalid_value_is_rejected():
 
 @requires_pydantic_settings
 def test_env_nested_override(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
-    assert Settings().storage.vector_dim == 256
+    monkeypatch.setenv("RAG_EMBEDDING__DIM", "256")
+    assert Settings().embedding.dim == 256
 
 
 @requires_pydantic_settings
@@ -94,12 +91,12 @@ def test_env_invalid_value_raises(monkeypatch):
 
 def test_load_env_overrides_parses_nested_keys():
     env = {
-        "RAG_STORAGE__BACKEND": "milvus",
-        "RAG_STORAGE__VECTOR_DIM": "512",
+        "RAG_EMBEDDING__PROVIDER": "qwen",
+        "RAG_EMBEDDING__DIM": "512",
         "RAG_LOGGING__JSON": "true",
     }
     data = load_env_overrides(env)
-    assert data["storage"] == {"backend": "milvus", "vector_dim": "512"}
+    assert data["embedding"] == {"provider": "qwen", "dim": "512"}
     assert data["logging"] == {"json": "true"}
 
 
@@ -115,66 +112,66 @@ def test_load_env_overrides_parses_json_values():
 
 
 def test_load_reads_environment_by_default(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__BACKEND", "milvus")
-    monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
+    monkeypatch.setenv("RAG_EMBEDDING__PROVIDER", "qwen")
+    monkeypatch.setenv("RAG_EMBEDDING__DIM", "256")
     monkeypatch.setenv("RAG_LOGGING__JSON", "true")
     config = Settings.load()
-    assert config.storage.backend == "milvus"
-    assert config.storage.vector_dim == 256
+    assert config.embedding.provider == "qwen"
+    assert config.embedding.dim == 256
     assert config.logging.json_output is True
 
 
 def test_load_env_fills_fields_missing_from_override(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__MILVUS_URI", "127.0.0.1:19531")
-    config = Settings.load(storage={"backend": "milvus"})
-    assert config.storage.backend == "milvus"
-    assert config.storage.milvus_uri == "127.0.0.1:19531"
+    monkeypatch.setenv("RAG_EMBEDDING__MODEL", "qwen-embed")
+    config = Settings.load(embedding={"provider": "qwen"})
+    assert config.embedding.provider == "qwen"
+    assert config.embedding.model == "qwen-embed"
 
 
 def test_load_hardcode_wins_over_env(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
-    monkeypatch.setenv("RAG_STORAGE__BACKEND", "milvus")
+    monkeypatch.setenv("RAG_EMBEDDING__DIM", "256")
+    monkeypatch.setenv("RAG_EMBEDDING__PROVIDER", "qwen")
     monkeypatch.setenv("RAG_LOGGING__LEVEL", "DEBUG")
-    config = Settings.load(storage={"vector_dim": 512}, logging={"level": "WARNING"})
+    config = Settings.load(embedding={"dim": 512}, logging={"level": "WARNING"})
     # 同时存在时以硬编码为准（硬编码 > 环境变量）
-    assert config.storage.vector_dim == 512
+    assert config.embedding.dim == 512
     assert config.logging.level == "WARNING"
     # 未硬编码的字段仍由环境变量填充
-    assert config.storage.backend == "milvus"
+    assert config.embedding.provider == "qwen"
     assert config.logging.json_output is False
 
 
 def test_load_env_is_lower_than_code_override(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
-    assert Settings.load(storage={"vector_dim": 512}).storage.vector_dim == 512
+    monkeypatch.setenv("RAG_EMBEDDING__DIM", "256")
+    assert Settings.load(embedding={"dim": 512}).embedding.dim == 512
 
 
 def test_load_use_env_false_ignores_environment(monkeypatch):
-    monkeypatch.setenv("RAG_STORAGE__BACKEND", "milvus")
-    monkeypatch.setenv("RAG_STORAGE__VECTOR_DIM", "256")
+    monkeypatch.setenv("RAG_EMBEDDING__PROVIDER", "qwen")
+    monkeypatch.setenv("RAG_EMBEDDING__DIM", "256")
     monkeypatch.setenv("RAG_LOGGING__LEVEL", "DEBUG")
 
     # 对照：默认读取环境变量，证明环境确实生效
     from_env = Settings.load()
-    assert from_env.storage.backend == "milvus"
-    assert from_env.storage.vector_dim == 256
+    assert from_env.embedding.provider == "qwen"
+    assert from_env.embedding.dim == 256
     assert from_env.logging.level == "DEBUG"
 
     # use_env=False 时忽略环境变量，字段回落到默认值
     config = Settings.load(use_env=False)
-    assert config.storage.backend == "milvus"
-    assert config.storage.vector_dim == 1024
+    assert config.embedding.provider == "openai"
+    assert config.embedding.dim == 1024
     assert config.logging.level == "INFO"
 
     # 关闭环境变量只影响环境来源，显式给出的配置照常生效
-    hardcoded = Settings.load(use_env=False, storage={"vector_dim": 512})
-    assert hardcoded.storage.vector_dim == 512
-    assert hardcoded.storage.backend == "milvus"
+    hardcoded = Settings.load(use_env=False, embedding={"dim": 512})
+    assert hardcoded.embedding.dim == 512
+    assert hardcoded.embedding.provider == "openai"
 
 
 def test_load_ignores_unrelated_env_prefix(monkeypatch):
     monkeypatch.setenv("RAG_UNRELATED", "1")
-    assert Settings.load().storage.backend == "milvus"
+    assert Settings.load().embedding.provider == "openai"
 
 
 def test_load_invalid_env_value_raises(monkeypatch):
@@ -187,15 +184,15 @@ def test_load_invalid_env_value_raises(monkeypatch):
 
 
 def test_load_accepts_section_overrides():
-    config = Settings.load(storage={"backend": "milvus", "vector_dim": 512})
-    assert config.storage.backend == "milvus"
-    assert config.storage.vector_dim == 512
+    config = Settings.load(embedding={"provider": "qwen", "dim": 512})
+    assert config.embedding.provider == "qwen"
+    assert config.embedding.dim == 512
     assert config.chunking.max_chars == 250
 
 
 def test_load_accepts_mapping_source():
-    config = Settings.load({"storage": {"backend": "milvus"}}, chunking={"max_chars": 180})
-    assert config.storage.backend == "milvus"
+    config = Settings.load({"embedding": {"provider": "qwen"}}, chunking={"max_chars": 180})
+    assert config.embedding.provider == "qwen"
     assert config.chunking.max_chars == 180
 
 
@@ -206,7 +203,7 @@ def test_load_unknown_section_raises():
 
 def test_load_unknown_section_in_source_raises():
     with pytest.raises(ConfigError):
-        Settings.load({"storage": {"vector_dim": 8}, "unknown": {}})
+        Settings.load({"embedding": {"dim": 8}, "unknown": {}})
 
 
 def test_load_unknown_field_in_section_raises():
@@ -221,10 +218,10 @@ def test_load_rejects_file_path():
 
 
 def test_build_settings_accepts_overrides():
-    assert build_settings(storage={"backend": "milvus"}).storage.backend == "milvus"
+    assert build_settings(embedding={"provider": "qwen"}).embedding.provider == "qwen"
 
 
 def test_ragdata_create_accepts_overrides(logger):
-    app = RagData.create(overrides={"storage": {"backend": "milvus"}}, logger=logger, nlp=None)
-    assert app.settings.storage.backend == "milvus"
+    app = RagData.create(overrides={"embedding": {"provider": "qwen"}}, logger=logger, nlp=None)
+    assert app.settings.embedding.provider == "qwen"
 

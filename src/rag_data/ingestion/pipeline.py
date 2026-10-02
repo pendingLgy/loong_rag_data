@@ -1,4 +1,4 @@
-# 离线导入编排：解析、切块、实体抽取、向量化、批量写入。
+# 离线导入编排：解析、切块、实体抽取与向量化。
 
 from __future__ import annotations
 
@@ -13,42 +13,38 @@ from rag_data.ingestion import entities as entities_module
 from rag_data.ingestion import parsers
 from rag_data.logging.base import LoggerAdapter
 from rag_data.models import DocumentChunk
-from rag_data.storage.milvus_store import MilvusRecord
 
 DEFAULT_USER_ID = "default"
 
 
 class IngestionPipeline:
-    """离线导入管道：组合各领域服务完成端到端导入。"""
+    """离线导入管道：解析、切块、实体抽取并向量化，产出携带向量的切块。"""
 
     def __init__(
         self,
-        store: Any,
         embedder: Embedder,
         settings: Settings,
         logger: LoggerAdapter,
         nlp: Optional[Any] = None,
-) -> None:
-        self._store = store
+    ) -> None:
         self._embedder = embedder
         self._settings = settings
         self._logger = logger
         self._nlp = nlp
 
-    def run(self, paths: List[str], user_id: Optional[str] = None) -> int:
-        """批量导入多个文件，返回写入总条数；单文件失败不中断整批。"""
-        total = 0
+    def run(self, paths: List[str], user_id: Optional[str] = None) -> List[DocumentChunk]:
+        """批量向量化多个文件，返回携带向量的切块；单文件失败不中断整批。"""
+        collected: List[DocumentChunk] = []
         for path in paths:
             try:
-                total += self.ingest_file(path, user_id=user_id)
+                collected.extend(self.ingest_file(path, user_id=user_id))
             except Exception as exc:  # noqa: BLE001 单文件失败应跳过而非中断
                 self._logger.error("文件导入失败，已跳过", source_path=path, error=str(exc))
-        return total
+        return collected
 
-    def ingest_file(self, path: str, user_id: Optional[str] = None) -> int:
-        """导入单个文件，返回写入条数。"""
+    def ingest_file(self, path: str, user_id: Optional[str] = None) -> List[DocumentChunk]:
+        """向量化单个文件，返回携带向量的切块。"""
         resolved_user_id = user_id or DEFAULT_USER_ID
-        self._store.ensure_collection()
         text = parsers.parse_document(path, logger=self._logger)
         entity_list = entities_module.extract_entities(text, nlp=self._nlp)
         chunk_texts = chunking.build_semantic_chunks(
@@ -58,24 +54,31 @@ class IngestionPipeline:
             nlp=self._nlp,
             logger=self._logger,
         )
-        written = 0
-        batch: List[MilvusRecord] = []
-        for index, chunk_text in enumerate(chunk_texts):
-            chunk = self._make_chunk(path, index, chunk_text, entity_list, resolved_user_id)
-            batch.append(self._make_record(chunk))
-            if len(batch) >= self._settings.embedding.batch_size:
-                written += self._store.upsert(batch)
-                batch = []
-        if batch:
-            written += self._store.upsert(batch)
+        chunks = [
+            self._make_chunk(path, index, chunk_text, entity_list, resolved_user_id)
+            for index, chunk_text in enumerate(chunk_texts)
+        ]
+        embedded = self._embed_chunks(chunks)
         self._logger.info(
-            "文件导入完成",
+            "文件向量化完成",
             source_path=path,
             user_id=resolved_user_id,
-            chunks=len(chunk_texts),
-            written=written,
+            chunks=len(embedded),
         )
-        return written
+        return embedded
+
+    def _embed_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        """按 embedding.batch_size 分批编码，把向量回填到切块上。"""
+        embedded: List[DocumentChunk] = []
+        step = self._settings.embedding.batch_size
+        for start in range(0, len(chunks), step):
+            window = chunks[start:start + step]
+            vectors = self._embedder.encode([chunk.text for chunk in window])
+            embedded.extend(
+                chunk.model_copy(update={"vector": vector})
+                for chunk, vector in zip(window, vectors)
+            )
+        return embedded
 
     def _make_chunk(
         self,
@@ -93,16 +96,6 @@ class IngestionPipeline:
             text=text,
             entities=list(entity_list),
             created_at=time.time(),
-        )
-
-    def _make_record(self, chunk: DocumentChunk) -> MilvusRecord:
-        vector = self._embedder.encode([chunk.text])[0]
-        return MilvusRecord(
-            id=chunk.chunk_id,
-            text_payload=chunk.text,
-            vector=vector,
-            entities=list(chunk.entities),
-            created_at=chunk.created_at,
         )
 
     @staticmethod

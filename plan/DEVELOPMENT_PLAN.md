@@ -10,25 +10,29 @@
 4. 配置改为按模块分区，默认读取环境变量，并支持代码硬编码
 5. 新增流程门面，各流程调用集中封装
 6. 记录类支持通过配置切换，便于继承扩展字段
+7. 存储层整体移除（Milvus 实现、后端注册表、向量库配置与相关测试与文档），当前仓库聚焦向量化；向量落库流程待存储层重新设计后再补全
+
+> **实施状态**：存储层已落地后又被整体移除，M4 与 §11.3.5 等存储相关设计标注为（已移除），仅作历史参考；
+> 当前代码聚焦「解析 → 切块 → 实体 → 向量化」，与本文叙述不一致处以后者为准。
 
 ## 0. 项目现状盘点
 
 - pyproject.toml：hatchling 构建，源码根为 src 下的 rag_data 包，Python 需 3.8 以上；已声明核心与可选依赖、mypy 的 pydantic 插件、pytest 与 coverage 配置；hatch 环境分 default 与 rag_data_dev 两套，依赖由 uv 处理
-- src 下的 rag_data：核心包已生成，含 config、models、exceptions、facade、ingestion、embedding、storage、logging
+- src 下的 rag_data：核心包已生成，含 config、models、exceptions、facade、ingestion、embedding、logging
 - ingestion：解析、两阶段切块、实体抽取与导入编排
 - embedding：向量化封装，含批次与维度校验
-- storage：存储行编解码、后端注册表、Milvus 实现（建表与写入已落地）
+- storage：已整体移除；Milvus 实现、后端注册表与存储配置一并删除，落库流程待重新设计
 - logging：日志适配层，含 stdlib、loguru、structlog 三后端
 - facade：流程门面，一站式装配与调用
-- tests：单元测试覆盖模型、配置、日志、切块、实体、向量化、Schema、存储契约、导入管道、公共入口、记录类解析、流程门面与 Milvus 建表
-- README.md：项目说明、公共 API、流程门面、Milvus 建表、数据模型与扩展、配置
+- tests：单元测试覆盖模型、配置、日志、切块、实体、向量化、导入管道、字符串向量化、公共入口与流程门面
+- README.md：项目说明、公共 API、流程门面、数据模型、配置与开发
 - plan：本设计与开发计划
 - rag_artifact.md：架构设计源文档
-- 依赖现状：核心依赖 pydantic 与 pydantic-settings；可选依赖含 pymilvus、spacy、unstructured、loguru、structlog 等
+- 依赖现状：核心依赖 pydantic 与 pydantic-settings；可选依赖含 spacy、unstructured、loguru、structlog 等
 - 待补全：涉及外部服务的复杂逻辑以 TODO 标注，主要集中在文档解析（PDF 与 Word）、真实模型加载、spaCy 默认加载
 - 当前目录不是 git 仓库
 
-结论：骨架、类型模型、日志适配层、流程门面与 Milvus 建表已就绪，单元测试可运行；文档解析与真实模型加载待人工补全。
+结论：骨架、类型模型、日志适配层、流程门面与向量化链路已就绪，单元测试可运行；文档解析与真实模型加载待人工补全，向量落库流程待重新设计。
 
 ## 1. 目标与范围
 
@@ -48,7 +52,7 @@
 ### 1.2 范围内
 
 - 模块一：批量切块 Batch Chunking
-- 模块二：向量库 Schema，Milvus 为主、Qdrant 可插拔
+- 模块二：向量库 Schema（存储层已移除，待重新设计）
 - 向量化模块：Embedding 封装与批量编码
 - 类型层：pydantic 模型与 pydantic-settings 配置
 - 日志适配层：stdlib logging、loguru、structlog 多后端
@@ -72,14 +76,13 @@
 | 配置管理 | pydantic-settings | BaseSettings 支持环境变量与 .env |
 | 文档解析 | Unstructured、MinerU | 需带 Markdown 层级输出 |
 | 分句与实体 | spaCy、zh_core_web_sm | 停用 ner 与 parser，启用 sentencizer |
-| 向量化 | 外部 Embedding 服务（openai、qwen）或自建 provider | 默认 openai；维度需与 storage.vector_dim 对齐 |
-| 向量库 | pymilvus、可选 qdrant-client | 存储后端接口（无基类，鸭子类型） |
+| 向量化 | 外部 Embedding 服务（openai、qwen）或自建 provider | 默认 openai；维度需与 embedding.dim 对齐 |
 | 日志框架 | stdlib logging、loguru、structlog | 由适配层统一封装，可切换 |
 | 构建与依赖 | hatch 管理构建与运行环境，uv 解析与安装依赖 | 构建后端为 hatchling |
 | 测试 | pytest、pytest-cov | 已配置 coverage |
 | 质量 | mypy、ruff | 配合 pydantic 插件做类型检查 |
 
-依赖分层：pydantic 与 pydantic-settings 为核心必装；loguru、structlog、qdrant-client、sentence-transformers 均为可选依赖，按需安装。
+依赖分层：pydantic 与 pydantic-settings 为核心必装；loguru、structlog、sentence-transformers 均为可选依赖，按需安装。
 
 ## 3. 目标目录结构
 
@@ -95,7 +98,7 @@ rag-data
 │     ├─ __about__.py        版本号
 │     ├─ __init__.py         公共入口，统一导出 API
 │     ├─ config.py           pydantic-settings 全局配置
-│     ├─ store_registry.py   存储后端注册表与用户模块加载
+│     ├─ registry.py         通用注册表（嵌入 provider 复用）
 │     ├─ models              pydantic 数据模型
 │     │  ├─ __init__.py      公共导出，保持 rag_data.models 入口不变
 │     │  └─ document.py      DocumentChunk
@@ -108,8 +111,6 @@ rag-data
 │     │  └─ pipeline.py      离线导入编排
 │     ├─ embedding           向量化接口、provider 注册表与 openai、qwen 实现
 │     │  └─ embedder.py      Embedding 封装
-│     ├─ storage             向量库
-│     │  └─ milvus_store.py  MilvusRecord 与 Milvus 实现（建表、写入）
 │     └─ logging             日志适配层
 │        ├─ base.py          LoggerAdapter 抽象
 │        ├─ stdlib_adapter.py
@@ -123,12 +124,10 @@ rag-data
    ├─ test_chunking.py
    ├─ test_entities.py
    ├─ test_embedder.py
-   ├─ test_storage_row.py
-   ├─ test_store_contract.py
+   ├─ test_embedding_provider.py
    ├─ test_pipeline.py
    ├─ test_public_api.py
-   ├─ test_facade.py
-   └─ test_milvus_mapping.py
+   └─ test_facade.py
 ```
 
 说明：日志适配层目录名为 logging，位于 rag_data 包内，采用绝对导入避免与标准库 logging 冲突；如仍担心歧义，可改名为 observability。
@@ -141,7 +140,7 @@ rag-data
 
 - 创建 src 下的 rag_data 包及 __about__.py，定义版本号供 hatch 读取
 - 创建各子包 __init__.py
-- 在 pyproject.toml 声明核心依赖 pydantic、pydantic-settings 与可选依赖 loguru、structlog、pymilvus 等
+- 在 pyproject.toml 声明核心依赖 pydantic、pydantic-settings 与可选依赖 loguru、structlog 等
 - 声明 dev 依赖 pytest、mypy、ruff 以及 pydantic 的 mypy 插件
 - 配置 hatch 环境：default 含 dev 工具，rag_data_dev 叠加全部可选依赖，并定义 test、types、check、format 脚本
 - 依赖安装与锁定交由 uv 处理，uv 直接读取 pyproject.toml 的依赖声明
@@ -154,8 +153,8 @@ rag-data
 
 任务：
 
-- models 包：以 pydantic BaseModel 定义 DocumentChunk 与记录类路径解析；MilvusRecord 由 storage.milvus_store 承载
-- 为关键字段加约束：text 非空、vector 维度校验、score 取值 0 到 1
+- models 包：以 pydantic BaseModel 定义 DocumentChunk，切块元数据与向量同体
+- 为关键字段加约束：chunk_id 与 text 非空、created_at 非负；向量维度由 Embedder 校验
 - config.py：以 pydantic-settings BaseSettings 定义 Settings，按模块分区，含 env_prefix、嵌套分隔符、.env 加载
 - 对互相约束的字段使用 model_validator，对单字段使用 field_validator
 - 配置来源优先级：初始化参数 大于 环境变量 大于 .env 大于 默认值
@@ -190,9 +189,9 @@ rag-data
 交付：chunking.py
 验收：单测覆盖 空文本、单句、恰好等于上限、需 overlap 的跨块、超长单句
 
-### M4 向量库 Schema（1 人天）
+### M4 向量库 Schema（1 人天，已移除）
 
-对应文档 模块二，字段按向量化范围裁剪。
+对应文档 模块二，字段按向量化范围裁剪；本里程碑对应的存储层已整体移除，下列任务仅作历史记录。
 
 任务：
 
@@ -225,8 +224,8 @@ rag-data
 任务：
 
 - 包根 __init__.py 统一导出全部公共 API，并登记 __all__
-- facade.py 封装各流程调用：配置、日志、存储、句柄、向量化、管道
-- RagData 提供 init_collection、ingest、ingest_file、close，支持依赖注入与上下文管理
+- facade.py 封装各流程调用：配置、日志、句柄、向量化、管道
+- RagData 提供 ingest、ingest_file、vectorize、vectorize_text，支持依赖注入
 
 交付：__init__.py、facade.py
 验收：外部仅导入 rag_data 即可完成全部流程；__all__ 全部可解析
@@ -244,7 +243,6 @@ rag-data
 
 - config.Settings：pydantic-settings 的 BaseSettings，按模块分区，实例化即完成校验
 - models.DocumentChunk：pydantic BaseModel
-- storage.milvus_store.MilvusRecord：基础字段与校验，extra 允许；含存储行编解码与 build_collection_schema（Milvus 建表）
 - logging.factory.configure_logging（settings）返回 LoggerAdapter
 - logging.factory.get_logger（name）返回 LoggerAdapter
 - logging.base.LoggerAdapter：debug、info、warning、error、exception、bind、context
@@ -252,11 +250,9 @@ rag-data
 - ingestion.chunking.build_semantic_chunks（text，max_chars 默认 250，overlap_sents 默认 1，nlp 可选，logger 可选）返回切块列表
 - ingestion.entities.extract_entities（text，nlp 可选）返回实体列表
 - embedding.embedder.Embedder.encode（texts）返回向量列表
-- 记录类方法：to_storage_row、from_storage_row
-- 存储实现：ensure_collection、upsert（records）；无需继承基类，登记后端名即可装配
-- ingestion.pipeline.IngestionPipeline：ingest_file（path，user_id 可选）、run（paths，user_id 可选）返回写入条数
-- facade.RagData：init_collection、ingest、ingest_file、close，支持上下文管理
-- 一键入口：init_collection（source）、ingest（paths，source，user_id）
+- ingestion.pipeline.IngestionPipeline：ingest_file（path，user_id 可选）、run（paths，user_id 可选）返回携带向量的切块列表
+- facade.RagData：ingest、ingest_file、vectorize、vectorize_text，依赖均可注入
+- 一键入口：ingest（paths，source，user_id）、vectorize（texts，source）
 
 ## 6. 配置与默认值
 
@@ -264,18 +260,15 @@ rag-data
 
 | 模块 | 字段 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| storage | backend | milvus | 存储后端名，对应注册表键；用 register_store 显式登记 |
-| storage | store_modules | 空列表 | 用户提供的后端模块：点分路径或以 .py 结尾的文件路径，导入即登记 |
-| storage | milvus_uri | localhost:19530 | Milvus 服务地址 |
-| storage | milvus_db | default | 目标数据库名，集合须在该库中 |
-| storage | collection_name | memory_store | 集合名 |
-| storage | vector_dim | 1024 | 向量维度，建表前校验 |
-| storage | metric | COSINE | 距离度量 |
-| storage | index_type | HNSW | 向量索引类型 |
 | chunking | max_chars | 250 | 切块字符上限，区间 150 至 300 |
 | chunking | overlap_sents | 1 | 切块重叠句数 |
-| embedding | model | 空字符串 | Embedding 模型标识 |
-| embedding | batch_size | 128 | 批量写入与编码大小 |
+| embedding | provider | openai | 嵌入模型注册表中的键 |
+| embedding | model | 空字符串 | Embedding 模型标识，留空用 provider 默认模型 |
+| embedding | batch_size | 128 | 批量编码大小 |
+| embedding | dim | 1024 | 期望输出维度，向量化结果据此校验 |
+| embedding | api_key | 空字符串 | 留空时读取 provider 约定的环境变量 |
+| embedding | base_url | 空字符串 | 留空时用 provider 默认地址 |
+| embedding | timeout | 60.0 | 单次请求超时秒数 |
 | nlp | spacy_model | zh_core_web_sm | 句法与实体模型 |
 | logging | backend | auto | stdlib、loguru、structlog 或 auto |
 | logging | level | INFO | 日志级别 |
@@ -290,9 +283,7 @@ rag-data
 - 类型层：models 与 config 的校验用例，覆盖非法值、边界值、环境变量覆盖
 - 日志层：以参数化用例逐一验证 stdlib、loguru、structlog 适配器输出与字段绑定
 - 纯逻辑：chunking、entities、embedder，外部依赖最小化
-- 存储层用内存 Fake 实现测接口契约；Milvus 集成测试标记为 slow，默认跳过
-- 建表层：以假 pymilvus 注入 sys.modules，验证字段生成、索引参数与建表幂等，无需真实服务
-- 端到端：小样例文档经内存 store 到写入断言
+- 端到端：小样例文档经假嵌入模型编码到向量产出断言
 - 覆盖率目标：核心模块 85 以上
 
 ## 8. 依赖与风险
@@ -303,9 +294,8 @@ rag-data
 | 日志框架为可选依赖 | 未安装时导入失败 | 适配器惰性导入，缺失时回退 stdlib 并给出提示 |
 | 子包名 logging 与标准库同名 | 误导入歧义 | 包内一律绝对导入，必要时改名 observability |
 | spaCy 中文模型体积与安装 | 首次环境搭建慢 | 模型下载脚本化与 CI 缓存 |
-| Milvus 本地依赖较重 | 集成测试不便 | 存储接口加测试替身，建表用假 pymilvus 测试，集成测试可选 |
 | Unstructured 与 MinerU 版本差异 | 解析结果不稳定 | 锁版本并加解析回归样例 |
-| Embedding 模型与维度不一致 | 索引与查询不匹配 | 维度写入配置，pydantic 与建表双重校验 |
+| Embedding 模型与维度不一致 | 下游按错误维度使用 | 维度写入 embedding.dim，Embedder 编码后逐条校验 |
 | Python 3.8 运行期类型语法 | list 下标等新语法在 3.8 报错 | 文件首行加 from __future__ import annotations |
 
 ## 9. 建议排期（合计约 7.5 人天）
@@ -316,7 +306,7 @@ rag-data
 | M1 | 类型模型与配置（pydantic） | 1.0 |
 | M2 | 日志适配层 | 1.0 |
 | M3 | 两阶段切块 | 1.0 |
-| M4 | 向量库 Schema | 1.0 |
+| M4 | 向量库 Schema（已移除） | 1.0 |
 | M5 | 向量化模块与导入管道 | 2.0 |
 | M6 | 公共入口与流程门面 | 1.0 |
 | M7 | 测试与文档 | 1.0 |
@@ -338,10 +328,7 @@ RagData（facade）              表现层：流程门面
 IngestionPipeline            应用编排层
    |
 parsers、chunking、entities、embedder   领域服务层
-   |
-存储接口（无基类）           抽象接口层
-   |
-MilvusVectorStore              基础设施层
+
 
 config.Settings（pydantic-settings）   横切层：类型安全的只读配置
 models（pydantic BaseModel）          横切层：数据契约与校验
@@ -350,8 +337,8 @@ logging（LoggerAdapter）              横切层：日志抽象，屏蔽具体�
 
 依赖原则：
 
-1. 上层只依赖存储接口（鸭子类型），不直接依赖 pymilvus 等 SDK
-2. 具体存储实现通过构造注入，即依赖反转，便于替换为测试替身
+1. 门面通过装配获得依赖，领域服务不直接依赖具体实现
+2. 具体实现通过构造注入，即依赖反转，便于替换为测试替身
 3. 领域服务层只依赖 LoggerAdapter 抽象，不 import loguru 或 structlog
 4. config 为不可变且已校验的配置对象，逐层向下传递，禁止模块级全局可变状态
 5. 所有跨层数据以 pydantic 模型承载，边界处自动校验
@@ -359,40 +346,30 @@ logging（LoggerAdapter）              横切层：日志抽象，屏蔽具体�
 ### 11.2 数据模型（pydantic）
 
 ```python
-class MilvusRecord(BaseModel):
-    # extra=allow 支持继承与扩展：
-    # 1. 子类可声明类型化字段，例如 user_id、tags
-    # 2. 也可直接传入未声明字段，落入扩展字段集合
-    model_config = ConfigDict(extra="allow")
+class DocumentChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    id: str = Field(min_length=1)
-    text_payload: str = Field(min_length=1)
-    vector: List[float] = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    text: str = Field(min_length=1)
     entities: List[str] = Field(default_factory=list)
     created_at: float = Field(ge=0.0)
-
-    @field_validator("vector")
-    @classmethod
-    def _check_vector(cls, value: List[float]) -> List[float]: ...
-
-    # 存储行编解码与建表同属本类
-    @classmethod
-    def build_collection_schema(cls, pymilvus: Any, vector_dim: int) -> Any: ...
+    vector: List[float] = Field(default_factory=list)   # 向量化后填入
 ```
 
 字段约定：
 
 | 模型 | 字段 |
 | :--- | :--- |
-| MilvusRecord | id、text_payload、vector、entities、created_at；extra 允许，另含存储行编解码与 build_collection_schema |
+| DocumentChunk | chunk_id、user_id、source_path、text、entities、created_at、vector |
 
 设计要点：
 
-1. 主键统一为 id，不再使用 memory_id；基类不再包含 user_id
-2. extra 设为 allow，基类约束收敛，扩展能力交给子类或运行时传入
-4. 基类字段仍保留约束（非空、向量非空、时间戳非负），子类自动继承校验
-5. 原 extra=forbid 的拼写保护由测试覆盖，避免误传字段静默入库
-6. 建表由 MilvusRecord.build_collection_schema 提供，硬编码基础字段
+1. 切块与向量同体，一个模型贯穿「切块 → 向量化」，不再区分中间态与记录类
+2. model_config 为 frozen，实例不可变；向量化用 model_copy(update=...) 回填 vector
+3. vector 默认空表示尚未向量化，维度由 Embedder 按 embedding.dim 校验
+4. chunk_id 由内容哈希生成，重复导入得到相同 id，便于后续落库保持幂等
 
 ### 11.3 各模块职责与接口签名
 
@@ -401,14 +378,16 @@ class MilvusRecord(BaseModel):
 职责：以嵌套模型承载各模块配置，实例化即完成校验；默认读取环境变量，也支持代码硬编码。
 
 ```python
-class StorageSettings(BaseModel):
-    backend: str = "milvus"
-    milvus_uri: str = "localhost:19530"
-    milvus_db: str = "default"
-    collection_name: str = "memory_store"
-    vector_dim: int = Field(default=1024, gt=0)
-    metric: Literal["COSINE", "L2", "IP"] = "COSINE"
-    index_type: Literal["HNSW", "IVFLAT"] = "HNSW"
+class ChunkingSettings(BaseModel):
+    max_chars: int = Field(default=250, ge=150, le=300)
+    overlap_sents: int = Field(default=1, ge=0)
+
+
+class EmbeddingSettings(BaseModel):
+    provider: str = "openai"
+    model: str = ""
+    batch_size: int = Field(default=128, gt=0)
+    dim: int = Field(default=1024, gt=0)
 
 
 ENV_PREFIX = "RAG_"
@@ -423,7 +402,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    storage: StorageSettings = Field(default_factory=StorageSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     nlp: NLPSettings = Field(default_factory=NLPSettings)
@@ -443,7 +421,7 @@ SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = { ... }
 | :--- | :--- |
 | Settings() | 默认读取环境变量（含 .env），未提供时用字段默认值 |
 | Settings.load() | 同上，显式表达按环境变量加载 |
-| Settings.load(storage={...}) | 代码硬编码分区配置，逐字段覆盖环境变量 |
+| Settings.load(embedding={...}) | 代码硬编码分区配置，逐字段覆盖环境变量 |
 | Settings.load({...}) | 代码硬编码整体字典，与分区写法等价 |
 | Settings.load(use_env=False) | 忽略环境变量，仅取硬编码与字段默认值 |
 
@@ -465,7 +443,7 @@ SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = { ... }
 2. 每个分区模型 extra 为 forbid，分区内拼错字段会在加载期即报错
 3. 根模型 extra 为 ignore：RAG_ 命名空间可能混入无关变量，避免误报
 4. 代码硬编码中的分区名由 _validate_sections 校验，写错即抛 ConfigError 并列出可用分区
-5. 环境变量支持嵌套覆盖，如 RAG_STORAGE__VECTOR_DIM 覆盖 storage.vector_dim
+5. 环境变量支持嵌套覆盖，如 RAG_EMBEDDING__DIM 覆盖 embedding.dim
 6. 取值交由 pydantic 转换，JSON 对象与数组按 JSON 解析
 7. logging 分区中 json 为保留名，字段名为 json_output 并设置别名 json
 8. use_env 为 False 时先以分区默认值补齐全部字段再作为构造实参，显式实参优先级最高，环境变量无从渗入，不依赖 model_validate 的版本行为
@@ -541,11 +519,11 @@ def get_logger(name: str) -> LoggerAdapter: ...
 
 ```python
 class IngestionPipeline:
-    def __init__(self, store, embedder, settings, logger, nlp=None): ...
+    def __init__(self, embedder, settings, logger, nlp=None): ...
 
-    def run(self, paths: List[str], user_id: Optional[str] = None) -> int: ...
-    def ingest_file(self, path: str, user_id: Optional[str] = None) -> int: ...
-    def _make_record(self, chunk: DocumentChunk) -> MilvusRecord: ...
+    def run(self, paths: List[str], user_id: Optional[str] = None) -> List[DocumentChunk]: ...
+    def ingest_file(self, path: str, user_id: Optional[str] = None) -> List[DocumentChunk]: ...
+    def _embed_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]: ...
 
     @staticmethod
     def _content_hash(user_id: str, source_path: str, text: str) -> str: ...
@@ -553,10 +531,10 @@ class IngestionPipeline:
 
 设计要点：
 
-1. 编排顺序为 解析 到 切块 到 实体抽取 到 向量化 到 批量 upsert
+1. 编排顺序为 解析 到 切块 到 实体抽取 到 向量化 到 回填向量
 2. memory 主键由 user_id、source_path 与切块内容做 sha256 生成，重复导入幂等
-3. 按 settings.embedding.batch_size 分批写入，降低单次请求压力
-4. 使用配置指定的记录类构造记录，使自定义字段获得校验并随记录落库
+3. 按 settings.embedding.batch_size 分批编码，降低单次请求压力
+4. 向量经 model_copy 回填到 frozen 的 DocumentChunk.vector
 5. 每个阶段以 bind 绑定 source_path 与 user_id，便于链路定位
 
 #### 11.3.4 embedding 子包
@@ -619,14 +597,15 @@ def create_embedding_provider(name, settings, logger, **kwargs) -> BaseEmbedding
 - 接口：class Embedder 提供 encode(self, texts: List[str]) -> List[List[float]]
 - 设计：provider 由 embedding.provider 经注册表解析；注入的 model 优先且绕过配置
 - 设计：批次大小取 embedding.batch_size 与 provider 的 max_batch_size 的较小者
-- 设计：输出维度需与 storage.vector_dim 一致，不一致抛 EmbeddingError
+- 设计：输出维度需与 embedding.dim 一致，不一致抛 EmbeddingError
 - 设计：空输入直接返回，不触发 provider 装配
-- TODO：依据 storage.metric 决定是否做 L2 归一化，目前透传 provider 结果
 
 
-#### 11.3.5 storage 子包
+#### 11.3.5 storage 子包（已移除）
 
-##### 记录类与 Milvus 索引定义
+> 存储层已整体移除，本小节及其下各接口签名仅作历史参考。
+
+##### 记录类与 Milvus 索引定义（已移除）
 
 职责：记录类提供存储行编解码，milvus_store 定义索引与建表参数。
 
@@ -779,13 +758,13 @@ class MilvusVectorStore:
 离线导入链路（唯一链路），全链路以 pydantic 模型传递并伴随日志埋点：
 
 ```text
-parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.encode  ->  构造 MilvusRecord 校验  ->  store.upsert
+parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.encode（分批）  ->  回填 vector（model_copy）  ->  DocumentChunk
 ```
 
 横切能力在链路两端生效：
 
 - 入参：Settings 已完成校验，LoggerAdapter 已就绪
-- 出参：MilvusRecord 为已校验模型
+- 出参：DocumentChunk 为已校验模型，vector 已按 embedding.dim 校验
 
 ### 11.5 异常与错误处理
 
@@ -795,7 +774,6 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 | OptionalDependencyError | 可选框架或解析库未安装 | 给出安装指引，日志层降级到 stdlib |
 | ParserDependencyError | 解析依赖未安装 | 给出安装指引 |
 | ParseError | 文档损坏或格式不支持 | 跳过该文件并累计失败清单 |
-| StoreError | 向量库连接或读写失败 | 有限次重试后抛出 |
 | EmbeddingError | 向量化服务失败 | 批次重试，仍失败则中断该批次 |
 
 原则：领域异常统一继承基类 RagDataError，便于上层统一捕获；外部依赖异常在边界层转换。
@@ -832,19 +810,16 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 
 | 测试文件 | 覆盖对象 | 关键用例 |
 | :--- | :--- | :--- |
-| test_models.py | pydantic 模型 | DocumentChunk 约束与冻结、字段常量 |
+| test_models.py | pydantic 模型 | DocumentChunk 约束与冻结、向量默认值与回填 |
 | test_config.py | Settings | 默认值、环境变量覆盖、代码硬编码优先、分区名校验、Literal 与区间校验 |
 | test_logging.py | LoggerAdapter | 三后端参数化输出、bind 与 context、auto 探测与回退 |
 | test_chunking.py | build_semantic_chunks | 空文本、单句、恰好等于上限、跨块重叠、超长单句 |
 | test_entities.py | extract_entities | 去重、大小写归一、空文本 |
 | test_embedder.py | Embedder | 批次切分、维度校验、假模型注入 |
 | test_embedding_provider.py | 嵌入模型注册表 | 内置 provider、继承即注册、配置解析、API Key 来源、请求构造、响应解析、错误包装、配置驱动切换、批量上限 |
-| test_storage_row.py | 存储行编解码 | 平铺列、往返、未声明字段不落库 |
-| test_pipeline.py | IngestionPipeline | 端到端导入、幂等、分批切分 |
+| test_pipeline.py | IngestionPipeline | 端到端向量化、幂等、分批切分、缺失文件 |
 | test_public_api.py | 公共入口 | 版本、__all__ 可解析、核心符号可从包根获取、端到端 |
-| test_facade.py | 流程门面 | 各流程装配、一键调用、上下文管理、依赖注入 |
-| test_store_registry.py | 存储后端注册表 | 内置后端、显式登记、路径与类对象注册、未知后端报错、配置驱动切换、用户模块导入 |
-| test_milvus_mapping.py | Milvus 建表与映射 | 表结构生成、维度注入、数组规范化、索引参数、建表幂等、分批写入 |
+| test_facade.py | 流程门面 | 各流程装配、一键调用、依赖注入、字符串向量化 |
 
 ### 11.9 公共入口（Public API）
 
@@ -858,20 +833,19 @@ from rag_data import Settings, RagData
 | 分组 | 导出符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | Settings、StorageSettings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides |
-| 数据模型 | DocumentChunk、MilvusRecord |
+| 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
+| 数据模型 | DocumentChunk |
 | 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
-| 存储 | register_store、register_backend、available_backends、is_registered、resolve_store、create_store、load_store_modules、BUILTIN_BACKENDS |
 | 日志适配 | LoggerAdapter、configure_logging、get_logger |
-| 流程门面 | RagData、init_collection、ingest、build_settings、build_logger、build_store、build_nlp、build_embedder、build_pipeline |
-| 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、SchemaMismatchError、StoreError、EmbeddingError |
+| 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
+| 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError |
 
 设计约定：
 
 1. __init__.py 只做统一导出，不含业务逻辑
 2. __all__ 显式登记公共 API，内部符号不外泄
-3. 依赖可选第三方库的实现（如 MilvusVectorStore）不纳入顶层导出，按需从子包引入，确保未安装可选依赖时仍可 import rag_data
+3. 依赖可选第三方库的实现不纳入顶层导出，按需从子包引入，确保未安装可选依赖时仍可 import rag_data
 4. 公共入口引入的模块仅依赖标准库或核心依赖，保证导入轻量
 
 ### 11.10 流程门面（facade.py）
@@ -881,11 +855,10 @@ from rag_data import Settings, RagData
 ```python
 from rag_data import RagData
 
-app = RagData.create()      # 装配配置、日志、存储、向量化、管道
-app.init_collection()       # 流程：建集合
-app.ingest(paths, user_id)  # 流程：批量导入
-app.ingest_file(path)       # 流程：导入单文件
-app.close()                 # 流程：释放资源
+app = RagData.create()      # 装配配置、日志、向量化、管道
+app.ingest(paths, user_id)  # 流程：向量化文件
+app.ingest_file(path)       # 流程：向量化单文件
+app.vectorize(texts)        # 流程：向量化字符串
 ```
 
 分流程的装配方法：
@@ -894,19 +867,18 @@ app.close()                 # 流程：释放资源
 | :--- | :--- |
 | build_settings(source) | 加载配置，支持整体字典与分区硬编码 |
 | build_logger(settings) | 装配日志适配层 |
-| build_store(settings, logger) | 按 storage.backend 装配向量库，milvus 惰性导入 |
 | build_nlp(settings, logger) | 加载 spaCy 句柄，缺失或失败时降级为 None |
 | build_embedder(settings, logger, model) | 装配向量化组件，provider 由配置决定 |
 | build_pipeline(...) | 装配导入管道 |
-| init_collection(source) | 一键建表 |
-| ingest(paths, source, user_id) | 一键导入 |
+| ingest(paths, source, user_id) | 一键向量化文件 |
+| vectorize(texts, source) | 一键向量化字符串 |
 
 设计约定：
 
 1. 门面只做流程装配与转发，不重复实现业务逻辑，真实逻辑仍在各子包
-2. RagData 支持依赖注入，store、embedder、logger、nlp 均可外部替换，便于测试
-3. 支持上下文管理，with 退出时自动 close
-4. 可选依赖（pymilvus、spaCy）一律惰性导入并降级，保证门面在最小依赖环境可用
+2. RagData 支持依赖注入，embedder、logger、nlp 均可外部替换，便于测试
+3. 字符串向量化直接返回向量列表，不经切块元数据
+4. 可选依赖（spaCy）一律惰性导入并降级，保证门面在最小依赖环境可用
 
 ## 12. 编码规范与工程约定
 
@@ -914,7 +886,7 @@ app.close()                 # 流程：释放资源
 2. 数据模型与配置一律使用 pydantic v2 写法：ConfigDict、field_validator、model_validator
 3. 业务代码只依赖 LoggerAdapter 抽象，禁止直接 import loguru、structlog 或标准库 logging
 4. 日志轮转与级别由配置驱动，不在业务代码里硬编码 handler
-5. 外部依赖 pymilvus、spacy、unstructured、loguru、structlog 惰性导入，缩短冷启动并便于注入测试替身
+5. 外部依赖 spacy、unstructured、loguru、structlog 惰性导入，缩短冷启动并便于注入测试替身
 6. 公共接口均带类型注解，交由 mypy 配合 pydantic 插件检查
 7. 使用 ruff 统一风格，固定行宽与导入顺序
 8. 不新增模块级可变全局状态，依赖一律通过构造注入

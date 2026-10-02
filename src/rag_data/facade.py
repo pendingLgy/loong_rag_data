@@ -1,30 +1,30 @@
 # 流程门面（Facade）：把各流程的调用方法集中封装于一处。
 #
-# 调用方只需要引入本模块或包根公共入口，无需再逐个导入 config、storage、
+# 调用方只需要引入本模块或包根公共入口，无需再逐个导入 config、
 # embedding、ingestion、logging 等子模块：
 #
 #   from rag_data import RagData
 #
 #   app = RagData.create()          # 装配全部流程
-#   app.init_collection()           # 流程：建集合
-#   app.ingest([docs.md])           # 流程：批量导入
+#   app.ingest([docs.md])           # 流程：向量化文件
+#   app.vectorize(["一段文本"])      # 流程：向量化字符串
 #
-# 也可以只调用单个流程的装配方法，例如仅需要日志与存储：
+# 也可以只调用单个流程的装配方法，例如仅需要日志与向量化：
 #
 #   settings = build_settings()
 #   logger = build_logger(settings)
-#   store = build_store(settings, logger)
+#   embedder = build_embedder(settings, logger)
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, List, Mapping, Optional, Sequence
 
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
 from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging
-from rag_data.store_registry import create_store
+from rag_data.models import DocumentChunk
 
 ConfigSource = Optional[Mapping[str, Any]]
 _UNSET: Any = object()
@@ -45,16 +45,8 @@ def build_logger(settings: Settings) -> LoggerAdapter:
     return configure_logging(settings)
 
 
-def build_store(settings: Settings, logger: LoggerAdapter) -> Any:
-    """流程三：按 settings.storage.backend 从注册表装配向量库。"""
-
-    # 后端实现由注册表解析：新增存储方式只需实现类，
-    # 再以 register_store 登记后端名，无需改动本函数。
-    return create_store(settings.storage.backend, settings, logger)
-
-
 def build_nlp(settings: Settings, logger: LoggerAdapter) -> Optional[Any]:
-    """流程四：加载 spaCy 句柄；不可用时返回 None，由回退实现接管。"""
+    """流程三：加载 spaCy 句柄；不可用时返回 None，由回退实现接管。"""
     model_name = settings.nlp.spacy_model
     try:
         import spacy
@@ -75,20 +67,19 @@ def build_nlp(settings: Settings, logger: LoggerAdapter) -> Optional[Any]:
 
 
 def build_embedder(settings: Settings, logger: LoggerAdapter, model: Optional[Any] = None) -> Embedder:
-    """流程五：装配向量化组件，provider 由 embedding.provider 决定。"""
+    """流程四：装配向量化组件，provider 由 embedding.provider 决定。"""
     # 未注入 model 时按配置装配 provider，注入时直接使用注入对象。
     return Embedder(settings, logger, model=model)
 
 
 def build_pipeline(
     settings: Settings,
-    store: Any,
     embedder: Embedder,
     logger: LoggerAdapter,
     nlp: Optional[Any] = None,
 ) -> IngestionPipeline:
-    """流程六：装配离线导入管道。"""
-    return IngestionPipeline(store, embedder, settings, logger, nlp=nlp)
+    """流程五：装配离线导入管道。"""
+    return IngestionPipeline(embedder, settings, logger, nlp=nlp)
 
 
 # ---------------- 一站式门面 ----------------
@@ -101,7 +92,6 @@ class RagData:
         self,
         settings: Optional[Settings] = None,
         *,
-        store: Optional[Any] = None,
         embedder: Optional[Embedder] = None,
         logger: Optional[LoggerAdapter] = None,
         nlp: Any = _UNSET,
@@ -109,18 +99,11 @@ class RagData:
     ) -> None:
         self.settings = settings if settings is not None else build_settings()
         self.logger = logger if logger is not None else build_logger(self.settings)
-        self.store = store if store is not None else build_store(self.settings, self.logger)
         self.nlp = build_nlp(self.settings, self.logger) if nlp is _UNSET else nlp
         self.embedder = (
             embedder if embedder is not None else build_embedder(self.settings, self.logger, model=model)
         )
-        self.pipeline = build_pipeline(
-            self.settings,
-            self.store,
-            self.embedder,
-            self.logger,
-            nlp=self.nlp,
-        )
+        self.pipeline = build_pipeline(self.settings, self.embedder, self.logger, nlp=self.nlp)
 
     @classmethod
     def create(
@@ -131,46 +114,29 @@ class RagData:
         **kwargs: Any,
     ) -> "RagData":
         """按配置源创建门面实例；overrides 可在代码中硬编码分区配置。"""
-        # kwargs 传给构造器（store、embedder、logger 等），overrides 归入配置。
+        # kwargs 传给构造器（embedder、logger 等），overrides 归入配置。
         return cls(build_settings(source, **(overrides or {})), **kwargs)
 
     # ---------------- 流程方法 ----------------
 
-    def init_collection(self) -> None:
-        """流程：初始化集合与索引。"""
-        self.store.ensure_collection()
-        self.logger.info(
-            "集合初始化完成",
-            backend=self.settings.storage.backend,
-            collection=self.settings.storage.collection_name,
-        )
-
-    def ingest(self, paths: Sequence[str], user_id: Optional[str] = None) -> int:
-        """流程：批量导入文件，返回写入总条数。"""
+    def ingest(self, paths: Sequence[str], user_id: Optional[str] = None) -> List[DocumentChunk]:
+        """流程：批量向量化文件，返回向量化切块。"""
         return self.pipeline.run(list(paths), user_id=user_id)
 
-    def ingest_file(self, path: str, user_id: Optional[str] = None) -> int:
-        """流程：导入单个文件，返回写入条数。"""
+    def ingest_file(self, path: str, user_id: Optional[str] = None) -> List[DocumentChunk]:
+        """流程：向量化单个文件，返回向量化切块。"""
         return self.pipeline.ingest_file(path, user_id=user_id)
 
-    def close(self) -> None:
-        """流程：释放底层资源。"""
-        self.store.close()
+    def vectorize(self, texts: Sequence[str]) -> List[List[float]]:
+        """流程：批量向量化字符串，返回与输入同序的稠密向量。"""
+        return self.embedder.encode(list(texts))
 
-    def __enter__(self) -> "RagData":
-        return self
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        self.close()
+    def vectorize_text(self, text: str) -> List[float]:
+        """流程：向量化单个字符串，返回其稠密向量。"""
+        return self.embedder.encode([text])[0]
 
 
 # ---------------- 一键调用入口 ----------------
-
-
-def init_collection(source: ConfigSource = None, **kwargs: Any) -> None:
-    """一键建表：内部完成全部流程装配。"""
-    with RagData.create(source, **kwargs) as app:
-        app.init_collection()
 
 
 def ingest(
@@ -178,20 +144,27 @@ def ingest(
     source: ConfigSource = None,
     user_id: Optional[str] = None,
     **kwargs: Any,
-) -> int:
-    """一键导入：内部完成全部流程装配，返回写入总条数。"""
-    with RagData.create(source, **kwargs) as app:
-        return app.ingest(paths, user_id=user_id)
+) -> List[DocumentChunk]:
+    """一键向量化：内部完成全部流程装配，返回向量化切块。"""
+    return RagData.create(source, **kwargs).ingest(paths, user_id=user_id)
+
+
+def vectorize(
+    texts: Sequence[str],
+    source: ConfigSource = None,
+    **kwargs: Any,
+) -> List[List[float]]:
+    """一键向量化字符串：内部完成全部流程装配，返回与输入同序的稠密向量。"""
+    return RagData.create(source, **kwargs).vectorize(texts)
 
 
 __all__ = [
     "RagData",
     "build_settings",
     "build_logger",
-    "build_store",
     "build_nlp",
     "build_embedder",
     "build_pipeline",
-    "init_collection",
     "ingest",
+    "vectorize",
 ]

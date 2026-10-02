@@ -3,8 +3,6 @@
 import os
 
 import rag_data
-from fake_store import FakeStore
-from rag_data.storage.milvus_store import MilvusVectorStore
 from rag_data import (
     RagData,
     Settings,
@@ -13,14 +11,10 @@ from rag_data import (
     build_nlp,
     build_pipeline,
     build_settings,
-    build_store,
     ingest,
-    init_collection,
+    vectorize,
 )
-
-
-def _settings(**overrides):
-    return Settings(**overrides)
+from rag_data.models import DocumentChunk
 
 
 class _FakeModel:
@@ -31,14 +25,13 @@ class _FakeModel:
         return [[0.1] * self._dim for _ in texts]
 
 
-def _app(settings, logger, model):
+def _app(settings, logger):
     return RagData(
         settings,
         logger=logger,
         nlp=None,
-        store=FakeStore(),
-        embedder=build_embedder(settings, logger, model=model),
-)
+        embedder=build_embedder(settings, logger, model=_FakeModel(settings.embedding.dim)),
+    )
 
 
 def _doc(tmp_path, name, content):
@@ -56,7 +49,7 @@ def test_build_settings_returns_settings():
 
 
 def test_build_settings_accepts_hardcoded_overrides():
-    assert build_settings(storage={"vector_dim": 8}).storage.vector_dim == 8
+    assert build_settings(embedding={"dim": 8}).embedding.dim == 8
     assert build_settings({"chunking": {"max_chars": 180}}).chunking.max_chars == 180
 
 
@@ -64,20 +57,20 @@ def test_build_logger_returns_adapter(settings):
     assert build_logger(settings) is not None
 
 
-def test_build_store_defaults_to_milvus(settings, logger):
-    store = build_store(settings, logger)
-    assert isinstance(store, MilvusVectorStore)
-
-
 def test_build_nlp_degrades_when_spacy_missing(settings, logger):
     result = build_nlp(settings, logger)
     assert result is None or hasattr(result, "pipe_names")
 
 
+def test_build_embedder_uses_injected_model(logger):
+    settings = Settings(embedding={"dim": 8})
+    embedder = build_embedder(settings, logger, model=_FakeModel(8))
+    assert embedder.encode(["a"])[0] == [0.1] * 8
+
+
 def test_build_pipeline_returns_pipeline(settings, logger):
-    store = build_store(settings, logger)
-    embedder = build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim))
-    pipeline = build_pipeline(settings, store, embedder, logger, nlp=None)
+    embedder = build_embedder(settings, logger, model=_FakeModel(settings.embedding.dim))
+    pipeline = build_pipeline(settings, embedder, logger, nlp=None)
     assert pipeline is not None
 
 
@@ -85,64 +78,71 @@ def test_build_pipeline_returns_pipeline(settings, logger):
 
 
 def test_create_assembles_all_flow_components(logger, settings):
-    app = RagData(
-        settings,
-        logger=logger,
-        nlp=None,
-        store=FakeStore(),
-        embedder=build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim)),
-    )
+    app = _app(settings, logger)
     assert isinstance(app.settings, Settings)
-    assert isinstance(app.store, FakeStore)
     assert app.pipeline is not None
-
-
-def test_init_collection_is_idempotent(settings, logger):
-    app = _app(settings, logger, _FakeModel(settings.storage.vector_dim))
-    app.init_collection()
-    app.init_collection()
+    assert app.embedder is not None
 
 
 def test_ingest_file_flow(tmp_path, settings, logger):
-    app = _app(settings, logger, _FakeModel(settings.storage.vector_dim))
+    app = _app(settings, logger)
     path = _doc(tmp_path, "a.md", "第一句。第二句。")
-    written = app.ingest_file(path)
-    assert written > 0
-    assert app.store.count() == written
+    embedded = app.ingest_file(path)
+    assert len(embedded) > 0
+    assert all(isinstance(item, DocumentChunk) for item in embedded)
 
 
 def test_ingest_paths_flow(tmp_path, settings, logger):
-    app = _app(settings, logger, _FakeModel(settings.storage.vector_dim))
+    app = _app(settings, logger)
     first = _doc(tmp_path, "a.md", "甲甲。乙乙。")
     second = _doc(tmp_path, "b.md", "丙丙。丁丁。")
-    written = app.ingest([first, second])
-    assert written > 0
-    assert app.store.count() == written
+    embedded = app.ingest([first, second])
+    assert len(embedded) > 0
+    assert {item.source_path for item in embedded} == {first, second}
 
 
-def test_context_manager_closes_store(settings, logger):
-    with _app(settings, logger, _FakeModel(settings.storage.vector_dim)) as app:
-        assert isinstance(app.store, FakeStore)
-
-
-def test_one_shot_ingest(tmp_path, monkeypatch):
+def test_one_shot_ingest(tmp_path):
     path = _doc(tmp_path, "one.md", "一键导入内容。")
     settings = Settings()
     logger = build_logger(settings)
-    app_kwargs = {
-        "logger": logger,
-        "nlp": None,
-        "store": FakeStore(),
-        "embedder": build_embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim)),
-    }
-    written = ingest([path], None, **app_kwargs)
-    assert written > 0
+    embedded = ingest(
+        [path],
+        None,
+        logger=logger,
+        nlp=None,
+        embedder=build_embedder(settings, logger, model=_FakeModel(settings.embedding.dim)),
+    )
+    assert len(embedded) > 0
 
 
-def test_one_shot_init_collection():
+def test_vectorize_texts_returns_vectors_in_order(settings, logger):
+    app = _app(settings, logger)
+    vectors = app.vectorize(["甲", "乙", "丙"])
+    assert len(vectors) == 3
+    assert all(len(vector) == settings.embedding.dim for vector in vectors)
+
+
+def test_vectorize_text_returns_single_vector(settings, logger):
+    app = _app(settings, logger)
+    vector = app.vectorize_text("一段文本")
+    assert len(vector) == settings.embedding.dim
+
+
+def test_vectorize_empty_returns_empty(settings, logger):
+    assert _app(settings, logger).vectorize([]) == []
+
+
+def test_one_shot_vectorize():
     settings = Settings()
     logger = build_logger(settings)
-    init_collection(None, logger=logger, nlp=None, store=FakeStore())
+    vectors = vectorize(
+        ["甲", "乙"],
+        None,
+        logger=logger,
+        nlp=None,
+        embedder=build_embedder(settings, logger, model=_FakeModel(settings.embedding.dim)),
+    )
+    assert len(vectors) == 2
 
 
 def test_facade_is_exported_from_package_root():

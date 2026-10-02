@@ -56,8 +56,8 @@ class BaseEmbeddingProvider(ABC):
 
     @property
     def dim(self) -> int:
-        """实际期望的输出维度：配置优先，缺省回落到 default_dim。"""
-        return self._settings.embedding.dim or self.default_dim
+        """期望的输出维度：由 embedding.dim 声明，供向量化结果校验。"""
+        return self._settings.embedding.dim
 
     @property
     def api_key(self) -> str:

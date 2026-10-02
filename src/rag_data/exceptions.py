@@ -27,13 +27,5 @@ class ParseError(RagDataError):
     """文档损坏或格式不支持。"""
 
 
-class SchemaMismatchError(RagDataError):
-    """向量维度或字段与集合定义不一致。"""
-
-
-class StoreError(RagDataError):
-    """向量库连接或读写失败。"""
-
-
 class EmbeddingError(RagDataError):
     """向量化失败。"""

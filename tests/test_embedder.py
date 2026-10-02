@@ -19,16 +19,16 @@ class _FakeModel:
 
 def test_encode_empty_returns_empty(logger):
     settings = Settings()
-    embedder = Embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim))
+    embedder = Embedder(settings, logger, model=_FakeModel(settings.embedding.dim))
     assert embedder.encode([]) == []
 
 
 def test_encode_batches_and_validates_dim(logger):
     settings = Settings(embedding={"batch_size": 2})
-    embedder = Embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim))
+    embedder = Embedder(settings, logger, model=_FakeModel(settings.embedding.dim))
     vectors = embedder.encode(["a", "b", "c"])
     assert len(vectors) == 3
-    assert len(vectors[0]) == settings.storage.vector_dim
+    assert len(vectors[0]) == settings.embedding.dim
 
 
 def test_provider_without_api_key_raises(logger, monkeypatch):
@@ -41,6 +41,6 @@ def test_provider_without_api_key_raises(logger, monkeypatch):
 
 def test_wrong_dimension_raises(logger):
     settings = Settings()
-    embedder = Embedder(settings, logger, model=_FakeModel(settings.storage.vector_dim, bad_dim=True))
+    embedder = Embedder(settings, logger, model=_FakeModel(settings.embedding.dim, bad_dim=True))
     with pytest.raises(EmbeddingError):
         embedder.encode(["a"])

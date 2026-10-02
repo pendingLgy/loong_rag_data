@@ -16,7 +16,6 @@ from rag_data.config import (
     LoggingSettings,
     NLPSettings,
     Settings,
-    StorageSettings,
     load_env_overrides,
 )
 from rag_data.embedding.base import BaseEmbeddingProvider
@@ -39,8 +38,6 @@ from rag_data.exceptions import (
     ParseError,
     ParserDependencyError,
     RagDataError,
-    SchemaMismatchError,
-    StoreError,
 )
 from rag_data.facade import (
     RagData,
@@ -49,9 +46,8 @@ from rag_data.facade import (
     build_nlp,
     build_pipeline,
     build_settings,
-    build_store,
     ingest,
-    init_collection,
+    vectorize,
 )
 from rag_data.ingestion.chunking import build_semantic_chunks
 from rag_data.ingestion.entities import extract_entities
@@ -60,32 +56,19 @@ from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging, get_logger
 from rag_data.models import DocumentChunk
-from rag_data.storage.milvus_store import MilvusRecord
-from rag_data.store_registry import (
-    BUILTIN_BACKENDS,
-    available_backends,
-    create_store,
-    is_registered,
-    load_store_modules,
-    register_backend,
-    register_store,
-    resolve_store,
-)
 
 __all__ = [
     "config",
     "models",
     "ingestion",
     "embedding",
-    "storage",
     "logging",
     # 流程门面
     "RagData",
-    "init_collection",
     "ingest",
+    "vectorize",
     "build_settings",
     "build_logger",
-    "build_store",
     "build_nlp",
     "build_embedder",
     "build_pipeline",
@@ -93,7 +76,6 @@ __all__ = [
     "__version__",
     # 配置
     "Settings",
-    "StorageSettings",
     "ChunkingSettings",
     "EmbeddingSettings",
     "NLPSettings",
@@ -103,7 +85,6 @@ __all__ = [
     "ENV_NESTED_DELIMITER",
     # 数据模型
     "DocumentChunk",
-    "MilvusRecord",
     # 导入管道
     "IngestionPipeline",
     "parse_document",
@@ -120,15 +101,6 @@ __all__ = [
     "is_embedding_registered",
     "resolve_embedding_provider",
     "create_embedding_provider",
-    # 存储
-    "register_store",
-    "register_backend",
-    "available_backends",
-    "is_registered",
-    "resolve_store",
-    "create_store",
-    "load_store_modules",
-    "BUILTIN_BACKENDS",
     # 日志适配层
     "LoggerAdapter",
     "configure_logging",
@@ -140,7 +112,5 @@ __all__ = [
     "OptionalDependencyError",
     "ParserDependencyError",
     "ParseError",
-    "SchemaMismatchError",
-    "StoreError",
     "EmbeddingError",
 ]

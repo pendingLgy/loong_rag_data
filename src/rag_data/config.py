@@ -1,14 +1,14 @@
 # 配置模型：按模块分区，默认读取环境变量，也支持在代码中硬编码。
 #
 # 优先级由高到低：
-#   1. 代码硬编码：Settings.load(storage={"backend": "milvus"})
-#   2. 环境变量：RAG_<分区>__<字段>，如 RAG_STORAGE__VECTOR_DIM=1024
+#   1. 代码硬编码：Settings.load(embedding={"provider": "qwen"})
+#   2. 环境变量：RAG_<分区>__<字段>，如 RAG_EMBEDDING__DIM=1024
 #   3. 字段默认值
 #
 # 环境变量命名规则：RAG_ 前缀，分区名与字段名大写，双下划线分隔，例如：
-#   RAG_STORAGE__BACKEND=milvus
-#   RAG_STORAGE__VECTOR_DIM=1024
-#   RAG_STORAGE__STORE_MODULES=["myapp.stores", "my_stores.py"]
+#   RAG_EMBEDDING__PROVIDER=qwen
+#   RAG_EMBEDDING__DIM=1024
+#   RAG_CHUNKING__MAX_CHARS=250
 #   RAG_LOGGING__LEVEL=DEBUG
 #   RAG_LOGGING__JSON=true
 
@@ -24,14 +24,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_data.exceptions import ConfigError
 
-SECTION_STORAGE = "storage"
 SECTION_CHUNKING = "chunking"
 SECTION_EMBEDDING = "embedding"
 SECTION_NLP = "nlp"
 SECTION_LOGGING = "logging"
 
 MODULE_SECTIONS: List[str] = [
-    SECTION_STORAGE,
     SECTION_CHUNKING,
     SECTION_EMBEDDING,
     SECTION_NLP,
@@ -42,27 +40,6 @@ MODULE_SECTIONS: List[str] = [
 ENV_PREFIX = "RAG_"
 ENV_NESTED_DELIMITER = "__"
 
-
-class StorageSettings(BaseModel):
-    """向量库相关配置。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # 后端名对应存储后端注册表中的键；内置 milvus，
-    # 可用 rag_data.available_backends() 查看。
-    backend: str = Field(default="milvus")
-    # 额外的存储后端模块：点分模块路径（myapp.stores）或以 .py 结尾的文件路径。
-    # 模块在导入时调用 register_store 或 register_backend 完成登记；
-    # 装配向量库时按需导入，重复导入幂等。
-    store_modules: List[str] = Field(default_factory=list)
-    milvus_uri: str = Field(default="localhost:19530")
-    # 目标数据库名。Milvus 支持多库隔离，需与 collection_name 所在库一致；
-    # 默认库名为 default，可用自定义库隔离不同项目的数据。
-    milvus_db: str = Field(default="default")
-    collection_name: str = Field(default="memory_store")
-    vector_dim: int = Field(default=1024, gt=0)
-    metric: Literal["COSINE", "L2", "IP"] = "COSINE"
-    index_type: Literal["HNSW", "IVFLAT"] = "HNSW"
 
 class ChunkingSettings(BaseModel):
     """两阶段语义切块参数。"""
@@ -83,8 +60,8 @@ class EmbeddingSettings(BaseModel):
     # 模型名。留空时用 provider 的默认模型，见各 provider 的 default_model。
     model: str = Field(default="")
     batch_size: int = Field(default=128, gt=0)
-    # 期望输出维度，0 表示用 provider 默认维度；需与 storage.vector_dim 对齐。
-    dim: int = Field(default=0, ge=0)
+    # 期望输出维度；向量化结果按此校验，默认与内置 qwen 模型一致。
+    dim: int = Field(default=1024, gt=0)
     # API Key。留空时读取 provider 约定的环境变量，如 OPENAI_API_KEY、DASHSCOPE_API_KEY。
     api_key: str = Field(default="")
     # 接口地址。留空时用 provider 默认地址，可指向自建网关或代理。
@@ -110,7 +87,6 @@ class LoggingSettings(BaseModel):
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
-    SECTION_STORAGE: StorageSettings,
     SECTION_CHUNKING: ChunkingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
     SECTION_NLP: NLPSettings,
@@ -130,7 +106,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    storage: StorageSettings = Field(default_factory=StorageSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     nlp: NLPSettings = Field(default_factory=NLPSettings)
@@ -166,7 +141,7 @@ class Settings(BaseSettings):
         return cls(**_with_defaults(layered))
 
 def load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    """把 RAG_ 前缀的环境变量组装为分区字典，键形如 RAG_STORAGE__VECTOR_DIM。"""
+    """把 RAG_ 前缀的环境变量组装为分区字典，键形如 RAG_EMBEDDING__DIM。"""
     source = os.environ if environ is None else environ
     data: Dict[str, Any] = {}
     for key, raw in source.items():
@@ -217,7 +192,7 @@ def _with_defaults(layered: Mapping[str, Any]) -> Dict[str, Any]:
     return filled
 
 def _assign_nested(data: Dict[str, Any], parts: List[str], value: Any) -> None:
-    """按路径写入嵌套字典，如 ["storage", "vector_dim"]。"""
+    """按路径写入嵌套字典，如 ["embedding", "dim"]。"""
     node = data
     for part in parts[:-1]:
         child = node.get(part)
