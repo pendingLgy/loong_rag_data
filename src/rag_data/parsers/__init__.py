@@ -7,8 +7,8 @@
 # markdown.py  MarkdownParser  .md、.markdown
 # txt.py       TxtParser       .txt
 # epub.py      EpubParser      .epub
-# pdf.py       PdfParser       .pdf（待实现）
-# word.py      WordParser      .docx、.doc（待实现）
+# pdf.py       PdfParser       .pdf（pypdf，按页提取）
+# word.py      WordParser      .docx（python-docx，标题映射为井号）
 # 新增格式：实现 DocumentParser 子类后加入 PARSERS 即可，
 # 后缀唯一性由 _build_index 的断言保证。
 
@@ -99,16 +99,8 @@ def parse_document(path: str, logger: Optional[LoggerAdapter] = None) -> str:
 def chunk_document(
     path: str,
     text: str,
-    max_chars: int = 250,
-    overlap_sents: int = 1,
     nlp: Any = None,
     logger: Optional[LoggerAdapter] = None,
 ) -> List[str]:
     """按文件扩展名分派到该格式的 chunk，规则由各子类自持。"""
-    return _resolve(path).chunk(
-        text,
-        max_chars=max_chars,
-        overlap_sents=overlap_sents,
-        nlp=nlp,
-        logger=logger,
-    )
+    return _resolve(path).chunk(text, nlp=nlp, logger=logger)

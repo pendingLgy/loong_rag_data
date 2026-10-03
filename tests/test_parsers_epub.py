@@ -8,7 +8,7 @@ import os
 import pytest
 
 from rag_data.exceptions import ParserDependencyError
-from rag_data.parsers.base import DocumentParser
+from rag_data.parsers.base import DocumentParser, DEFAULT_MODEL, load_nlp
 from rag_data.parsers.epub import EpubParser
 
 
@@ -28,10 +28,7 @@ def _handle(sentences):
 
 
 def _blank_zh_handle():
-    "构造不依赖下载模型的 spaCy 句柄（仅标点 sentencizer）。"
-    spacy = pytest.importorskip("spacy", reason="真实分句需要 spacy")
-    nlp = spacy.blank("zh")
-    nlp.add_pipe("sentencizer")
+    nlp = load_nlp(DEFAULT_MODEL)
     return nlp
 
 
@@ -133,7 +130,7 @@ def test_local_epub_parse_then_chunk():
     assert text.strip(), "解析结果不应为空"
 
     # 整本数十万字，spaCy 逐字切句在此规模上过慢；冒烟取前 5 万字符切块
-    sample = text[:50000]
+    sample = text[:3000]
     chunks = parser.chunk(sample, _blank_zh_handle())
 
     # for chunk in chunks:

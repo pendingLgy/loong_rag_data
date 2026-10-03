@@ -56,9 +56,9 @@ rag-data/
 │     ├─ parsers/            文档解析，一种格式一个 DocumentParser 子类
 │     │  ├─ __init__.py      汇总 PARSERS 并按扩展名派发 parse_document 与 chunk_document
 │     │  ├─ base.py          DocumentParser 基类：SUFFIXES、parse 与 chunk 契约、句柄加载
-│     │  ├─ markdown.py      MarkdownParser：.md、.markdown，按标题分节切块
-│     │  ├─ txt.py           TxtParser：.txt，按句子切块
-│     │  ├─ epub.py          EpubParser：.epub，章节提取（排除目录页）与按句切块
+│     │  ├─ markdown.py      MarkdownParser：.md、.markdown，按井号分章后递归切块
+│     │  ├─ txt.py           TxtParser：.txt，整篇递归切块
+│     │  ├─ epub.py          EpubParser：.epub，章节提取（排除目录页）与按井号分章递归切块
 │     │  ├─ pdf.py           PdfParser：.pdf，解析与切块待实现
 │     │  └─ word.py          WordParser：.docx、.doc，解析与切块待实现
 │     ├─ embedding/          向量化：抽象、注册表、内置 provider
@@ -431,12 +431,13 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
 ```text
 tests/
 ├─ conftest.py                    路径注入与 settings、logger 夹具
-├─ test_epub.py           11 项   EPUB 后缀、解析行为（章节顺序、目录页排除、清洗、异常）与短文本、中文、本机文件切块
 ├─ test_parsers_base.py   16 项   DocumentParser 分句、四分之一重叠前缀与递归切块
-└─ test_parsers_epub.py   10 项   EpubParser 契约、初始化与 chunk 切块（含复杂内容与本机文件）
+├─ test_parsers_epub.py   10 项   EpubParser 契约、初始化与 chunk 切块（含复杂内容与本机文件）
+├─ test_parsers_txt.py    12 项   TxtParser 契约、解析、chunk 切块与本机文件
+└─ test_parsers_markdown.py 12 项  MarkdownParser 契约、解析、按井号分章切块与本机文件
 ```
 
-当前合计 37 项通过。
+当前合计 50 项通过。
 
 ---
 
