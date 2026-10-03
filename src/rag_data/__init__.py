@@ -49,9 +49,8 @@ from rag_data.facade import (
     ingest,
     vectorize,
 )
-from rag_data.ingestion.chunking import build_semantic_chunks
 from rag_data.ingestion.entities import extract_entities
-from rag_data.ingestion.parsers import parse_document
+from rag_data.parsers import parse_document
 from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging, get_logger
@@ -88,7 +87,6 @@ __all__ = [
     # 导入管道
     "IngestionPipeline",
     "parse_document",
-    "build_semantic_chunks",
     "extract_entities",
     # 向量化
     "Embedder",

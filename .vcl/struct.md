@@ -51,10 +51,16 @@ rag-data/
 │     │  ├─ __init__.py       公共导出
 │     │  └─ document.py       DocumentChunk（含向量字段）
 │     ├─ ingestion/          解析 - 切块 - 实体 - 向量化编排
-│     │  ├─ parsers.py        文件读取（md/txt 直读，PDF/Word 待补）
-│     │  ├─ chunking.py       两阶段语义切块
-│     │  ├─ entities.py       实体抽取（spaCy，含回退）
+│     │  ├─ entities.py       实体抽取（NER，归一化去重）
 │     │  └─ pipeline.py       向量化编排：切块 - 编码 - 回填向量
+│     ├─ parsers/            文档解析，一种格式一个 DocumentParser 子类
+│     │  ├─ __init__.py      汇总 PARSERS 并按扩展名派发 parse_document 与 chunk_document
+│     │  ├─ base.py          DocumentParser 基类：SUFFIXES、parse 与 chunk 契约、句柄加载
+│     │  ├─ markdown.py      MarkdownParser：.md、.markdown，按标题分节切块
+│     │  ├─ txt.py           TxtParser：.txt，按句子切块
+│     │  ├─ epub.py          EpubParser：.epub，章节提取（排除目录页）与按句切块
+│     │  ├─ pdf.py           PdfParser：.pdf，解析与切块待实现
+│     │  └─ word.py          WordParser：.docx、.doc，解析与切块待实现
 │     ├─ embedding/          向量化：抽象、注册表、内置 provider
 │     │  ├─ base.py            BaseEmbeddingProvider 抽象
 │     │  ├─ registry.py        provider 注册表
@@ -221,7 +227,7 @@ backend 配置为 auto 时按可用性择一；两个可选后端未安装时回
 
 
 ```text
-文件 ─ parse_document ─ 文本 ─ build_semantic_chunks ─ 切块
+文件 ─ parse_document ─ 文本 ─ chunk_document ─ 切块
                                           │
                                 extract_entities 抽实体
                                           │
@@ -232,9 +238,10 @@ backend 配置为 auto 时按可用性择一；两个可选后端未安装时回
 
 | 文件 | 关键符号 | 说明 |
 | :--- | :--- | :--- |
-| parsers.py | parse_document(path, logger) | 读取文件为文本；md 与 txt 直读，PDF 与 Word 待补 |
-| chunking.py | build_semantic_chunks(...) | 两阶段切块：先按版面结构分段，再句级切分并保留重叠 |
-| entities.py | extract_entities(text, nlp=None) | 抽取实体；nlp 为空时走回退实现 |
+| parsers/ | parse_document、chunk_document | 按扩展名派发到 DocumentParser 子类；各格式规则自持 |
+| parsers/base.py | DocumentParser | 抽象基类：声明 SUFFIXES 与 parse(path, logger)、chunk(text, ...)；并承载句柄加载 load_nlp、clear_cache |
+| parsers/epub.py | EpubParser.parse | 按 spine 顺序提取章节正文，排除目录页与非正文项 |
+| entities.py | extract_entities(text, nlp=None, labels=None) | NER 抽取，归一化去重；句柄由调用方注入，未注入则不抽取 |
 | pipeline.py | IngestionPipeline | 编排，方法 run(paths, user_id) 与 ingest_file(path, user_id) |
 
 切块参数来自 chunking 分区：max_chars（150 到 300）、overlap_sents。
@@ -336,7 +343,7 @@ RagData.create(source=None, *, overrides=None, **kwargs)
 | 子包 | config、models、ingestion、embedding、logging |
 | 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
 | 数据模型 | DocumentChunk |
-| 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
+| 导入管道 | IngestionPipeline、parse_document、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
 | 日志 | LoggerAdapter、configure_logging、get_logger |
@@ -354,7 +361,7 @@ RagData.create(source=None, *, overrides=None, **kwargs)
 1. RagData.create(overrides)     装配 settings、logger、nlp、embedder、pipeline
 2. app.ingest(paths, user_id)    逐文件向量化，返回切块列表
      ├─ parse_document           读取文件为文本
-     ├─ build_semantic_chunks    两阶段切块
+     ├─ chunk_document           按格式切块（各 DocumentParser 子类自持规则）
      ├─ extract_entities         抽取实体
      ├─ Embedder.encode          分批编码为向量
      └─ 回填 vector              产出携带向量的 DocumentChunk
@@ -424,19 +431,12 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
 ```text
 tests/
 ├─ conftest.py                    路径注入与 settings、logger 夹具
-├─ test_config.py         27 项   默认值、环境变量、硬编码优先、分区校验
-├─ test_models.py          5 项   DocumentChunk 字段、向量默认值与回填
-├─ test_chunking.py        8 项   两阶段切块与重叠
-├─ test_entities.py        3 项   实体抽取与回退
-├─ test_pipeline.py        5 项   向量化编排、分批、幂等、缺失文件
-├─ test_embedder.py        4 项   批次切分、维度校验、注入优先
-├─ test_embedding_provider.py 26 项 provider 注册、配置解析、请求构造、错误包装
-├─ test_logging.py         6 项   后端选择与适配器行为
-├─ test_facade.py         15 项   分流程装配、门面调用、字符串向量化
-└─ test_public_api.py      7 项   公共入口端到端与存储层移除守护
+├─ test_epub.py           11 项   EPUB 后缀、解析行为（章节顺序、目录页排除、清洗、异常）与短文本、中文、本机文件切块
+├─ test_parsers_base.py   16 项   DocumentParser 分句、四分之一重叠前缀与递归切块
+└─ test_parsers_epub.py   10 项   EpubParser 契约、初始化与 chunk 切块（含复杂内容与本机文件）
 ```
 
-当前合计 104 项通过、2 项跳过（需真实 pydantic-settings 的环境变量用例）。
+当前合计 37 项通过。
 
 ---
 
@@ -448,6 +448,7 @@ tests/
 | :--- | :--- |
 | 核心 | pydantic、pydantic-settings |
 | parsers | unstructured、spacy |
+| epub | EbookLib、beautifulsoup4 |
 | embedding | sentence-transformers |
 | loguru | loguru |
 | structlog | structlog |
@@ -461,7 +462,7 @@ tests/
 
 | 位置 | 事项 |
 | :--- | :--- |
-| ingestion/parsers.py | PDF 与 Word 解析，基于 unstructured 或 MinerU |
+| parsers/ | 各格式解析器，PDF 与 Word 基于 unstructured 或 MinerU |
 | embedding | 兼容本地模型的 provider，如 sentence-transformers |
 | facade.py | build_nlp 的管道细化，按流程启用 ner 与句子边界 |
 | 数据保存 | 向量落库流程，待存储层重新设计后补全 |

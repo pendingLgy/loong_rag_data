@@ -21,3 +21,4 @@ def settings():
 @pytest.fixture()
 def logger(settings):
     return configure_logging(settings)
+

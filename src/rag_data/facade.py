@@ -21,6 +21,7 @@ from typing import Any, List, Mapping, Optional, Sequence
 
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
+from rag_data.parsers.base import load_nlp
 from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging
@@ -47,23 +48,8 @@ def build_logger(settings: Settings) -> LoggerAdapter:
 
 def build_nlp(settings: Settings, logger: LoggerAdapter) -> Optional[Any]:
     """流程三：加载 spaCy 句柄；不可用时返回 None，由回退实现接管。"""
-    model_name = settings.nlp.spacy_model
-    try:
-        import spacy
-    except ImportError:
-        logger.warning("spaCy 未安装，分句与实体抽取将使用回退实现", model=model_name)
-        return None
-    try:
-        nlp = spacy.load(model_name)
-    except Exception as exc:  # noqa: BLE001 模型缺失或加载失败均降级
-        logger.warning("spaCy 模型加载失败，将使用回退实现", model=model_name, error=str(exc))
-        return None
-    # TODO: 按流程细化管道配置——切块需要句子边界，实体抽取需要 ner；
-    #       当前仅在缺少句法分析器时补一个 sentencizer 兜底。
-    if "parser" not in nlp.pipe_names and "sentencizer" not in nlp.pipe_names:
-        nlp.add_pipe("sentencizer")
-    logger.info("spaCy 模型加载完成", model=model_name, pipes=list(nlp.pipe_names))
-    return nlp
+    # 加载与缓存见 rag_data.parsers.base；模型缺失或未安装时统一降级。
+    return load_nlp(settings.nlp.spacy_model, logger)
 
 
 def build_embedder(settings: Settings, logger: LoggerAdapter, model: Optional[Any] = None) -> Embedder:

@@ -4,7 +4,8 @@
 
 ## 特性
 
-- 两阶段语义切块：版面结构切分后进行句级切分并保留重叠
+- 两阶段语义切块与实体抽取：先分段再按句切分（优先 spaCy，缺失时标点回退）；实体经 NER 抽取并归一化去重；spaCy 句柄由门面加载并缓存，逐级注入切块与实体抽取
+- 文档解析：Markdown、TXT、EPUB 直读；EPUB 由 ebooklib 与 BeautifulSoup 提取正文并排除目录页，PDF 与 Word 待补
 - pydantic v2 数据模型与 pydantic-settings 配置，边界即校验
 - 日志适配层：标准库 logging、loguru、structlog 三后端可切换
 - 向量化产物：切块携带稠密向量，同一 DocumentChunk 模型贯穿全链路
@@ -42,13 +43,13 @@ uv venv
 uv pip install -e .
 
 # 按需安装可选依赖
-uv pip install -e ".[loguru]"
+uv pip install -e ".[epub,loguru]"
 
 # 安装开发依赖
 uv pip install -e ".[dev]"
 
 # 或一次性安装全部可选与开发依赖
-uv pip install -e ".[parsers,embedding,loguru,structlog,dev]"
+uv pip install -e ".[parsers,embedding,epub,loguru,structlog,dev]"
 ```
 
 激活虚拟环境：
@@ -81,8 +82,8 @@ hatch 环境直接读取 pyproject.toml 的依赖声明，已定义两套：
 
 | 环境 | 名称 | 包含依赖 |
 | :--- | :--- | :--- |
-| 默认环境 | default | 核心依赖 + dev（pytest、mypy、ruff）|
-| 开发环境 | rag_data_dev | parsers、embedding、loguru、structlog、dev |
+| 默认环境 | default | parsers、embedding、loguru、structlog、dev |
+| 开发环境 | rag_data_dev | parsers、embedding、epub、loguru、structlog、dev |
 
 ```bash
 # 创建环境
@@ -91,6 +92,9 @@ hatch env create rag_data_dev
 
 # 查看已有环境
 hatch env show
+
+# 查看已安装依赖
+hatch run rag_data_dev:pip list
 
 # 在默认环境中执行命令
 hatch run pytest
@@ -153,7 +157,7 @@ from rag_data import Settings, IngestionPipeline
 | 版本 | __version__ |
 | 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
 | 数据模型 | DocumentChunk |
-| 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
+| 导入管道 | IngestionPipeline、parse_document、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
 | 日志适配 | LoggerAdapter、configure_logging、get_logger |
@@ -406,6 +410,7 @@ src/rag_data
 - exceptions.py      领域异常
 - facade.py          流程门面，一站式封装各流程调用
 - ingestion          解析、切块、实体抽取、向量化编排
+- parsers            文档解析器：DocumentParser 基类 + 各格式子类（markdown、txt、epub、pdf、word）
 - embedding          向量化接口、provider 注册表与 openai、qwen 实现
 - logging            日志适配层
 ```
@@ -415,9 +420,7 @@ src/rag_data
 以下复杂逻辑以 TODO 标注，待人工补全：
 
 - 文档解析：PDF 与 Word，基于 unstructured 或 MinerU
-- 向量化：按 metric 决定是否做 L2 归一化
 - 向量化：兼容 embedding 接口的本地模型（如 sentence-transformers）provider
-- 实体抽取：默认加载 spaCy 模型
 - 数据保存：向量落库流程待存储层重新设计后补全
 
 ## 开发

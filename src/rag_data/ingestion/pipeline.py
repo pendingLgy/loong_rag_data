@@ -8,9 +8,8 @@ from typing import Any, List, Optional
 
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
-from rag_data.ingestion import chunking
 from rag_data.ingestion import entities as entities_module
-from rag_data.ingestion import parsers
+from rag_data import parsers
 from rag_data.logging.base import LoggerAdapter
 from rag_data.models import DocumentChunk
 
@@ -47,7 +46,8 @@ class IngestionPipeline:
         resolved_user_id = user_id or DEFAULT_USER_ID
         text = parsers.parse_document(path, logger=self._logger)
         entity_list = entities_module.extract_entities(text, nlp=self._nlp)
-        chunk_texts = chunking.build_semantic_chunks(
+        chunk_texts = parsers.chunk_document(
+            path,
             text,
             max_chars=self._settings.chunking.max_chars,
             overlap_sents=self._settings.chunking.overlap_sents,

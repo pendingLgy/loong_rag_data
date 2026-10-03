@@ -29,10 +29,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-parsers = ["unstructured>=0.12", "spacy>=3.7"]
+parsers = [
+  "unstructured>=0.12",
+  "spacy>=3.7",
+  "zh-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.7.0/zh_core_web_sm-3.7.0-py3-none-any.whl",
+]
 embedding = ["sentence-transformers>=2.5"]
 loguru = ["loguru>=0.7"]
 structlog = ["structlog>=24.1"]
+epub = [
+  "EbookLib>=0.20",
+  "beautifulsoup4>=4.15.0"
+]
 dev = [
   "pytest>=7.4",
   "pytest-cov>=4.1",
@@ -41,9 +49,9 @@ dev = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/loong/rag-data#readme"
-Issues = "https://github.com/loong/rag-data/issues"
-Source = "https://github.com/loong/rag-data"
+Documentation = "https://github.com/pendingLgy/loong_rag_data#readme"
+Issues = "https://github.com/pendingLgy/loong_rag_data/issues"
+Source = "https://github.com/pendingLgy/loong_rag_data"
 
 [tool.hatch.envs.default]
 features = [
@@ -51,6 +59,7 @@ features = [
   "embedding",
   "loguru",
   "structlog",
+  "epub",
   "dev",
 ]
 
@@ -68,6 +77,7 @@ features = [
   "loguru",
   "structlog",
   "dev",
+  "epub",
 ]
 
 [tool.hatch.envs.rag_data_dev.scripts]
@@ -83,9 +93,12 @@ path = "src/rag_data/__about__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag_data"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not integration'"
+addopts = "-s -q -m 'not integration'"
 markers = [
   "slow: 需要外部服务的集成测试，默认跳过",
   "integration: 真实调用外部服务的手工集成测试，默认跳过",

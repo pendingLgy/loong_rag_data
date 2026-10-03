@@ -24,12 +24,12 @@
 - storage：已整体移除；Milvus 实现、后端注册表与存储配置一并删除，落库流程待重新设计
 - logging：日志适配层，含 stdlib、loguru、structlog 三后端
 - facade：流程门面，一站式装配与调用
-- tests：单元测试覆盖模型、配置、日志、切块、实体、向量化、导入管道、字符串向量化、公共入口与流程门面
+- tests：单元测试覆盖模型、配置、日志、切块、实体、文档解析（含 EPUB）、向量化、导入管道、字符串向量化、公共入口与流程门面
 - README.md：项目说明、公共 API、流程门面、数据模型、配置与开发
 - plan：本设计与开发计划
 - rag_artifact.md：架构设计源文档
 - 依赖现状：核心依赖 pydantic 与 pydantic-settings；可选依赖含 spacy、unstructured、loguru、structlog 等
-- 待补全：涉及外部服务的复杂逻辑以 TODO 标注，主要集中在文档解析（PDF 与 Word）、真实模型加载、spaCy 默认加载
+- 待补全：涉及外部服务的复杂逻辑以 TODO 标注，主要集中在文档解析（PDF 与 Word）与真实模型加载
 - 当前目录不是 git 仓库
 
 结论：骨架、类型模型、日志适配层、流程门面与向量化链路已就绪，单元测试可运行；文档解析与真实模型加载待人工补全，向量落库流程待重新设计。
@@ -74,7 +74,7 @@
 | :--- | :--- | :--- |
 | 类型校验 | pydantic v2 | 数据模型统一继承 BaseModel |
 | 配置管理 | pydantic-settings | BaseSettings 支持环境变量与 .env |
-| 文档解析 | Unstructured、MinerU | 需带 Markdown 层级输出 |
+| 文档解析 | Unstructured、MinerU；EPUB 用 ebooklib 与 BeautifulSoup | 需带 Markdown 层级输出；EPUB 解析已落地 |
 | 分句与实体 | spaCy、zh_core_web_sm | 停用 ner 与 parser，启用 sentencizer |
 | 向量化 | 外部 Embedding 服务（openai、qwen）或自建 provider | 默认 openai；维度需与 embedding.dim 对齐 |
 | 日志框架 | stdlib logging、loguru、structlog | 由适配层统一封装，可切换 |
@@ -104,11 +104,15 @@ rag-data
 │     │  └─ document.py      DocumentChunk
 │     ├─ exceptions.py       领域异常基类
 │     ├─ facade.py           流程门面，封装各流程调用方法
-│     ├─ ingestion           解析与切块
-│     │  ├─ parsers.py       文档解析与结构化
-│     │  ├─ chunking.py      两阶段语义切块
-│     │  ├─ entities.py      spaCy 实体抽取
+│     ├─ ingestion           解析、实体抽取与编排
+│     │  ├─ entities.py      NER 实体抽取与归一化
 │     │  └─ pipeline.py      离线导入编排
+│     ├─ parsers             DocumentParser 基类 + 各格式子类
+│     │  ├─ markdown.py      .md、.markdown
+│     │  ├─ txt.py           .txt
+│     │  ├─ epub.py          .epub
+│     │  ├─ pdf.py           .pdf 待实现
+│     │  └─ word.py          .docx、.doc 待实现
 │     ├─ embedding           向量化接口、provider 注册表与 openai、qwen 实现
 │     │  └─ embedder.py      Embedding 封装
 │     └─ logging             日志适配层
@@ -118,16 +122,9 @@ rag-data
 │        ├─ structlog_adapter.py
 │        └─ factory.py       get_logger 与自动探测
 └─ tests
-   ├─ test_models.py
-   ├─ test_config.py
-   ├─ test_logging.py
-   ├─ test_chunking.py
-   ├─ test_entities.py
-   ├─ test_embedder.py
-   ├─ test_embedding_provider.py
-   ├─ test_pipeline.py
-   ├─ test_public_api.py
-   └─ test_facade.py
+   ├─ conftest.py
+   ├─ test_base.py
+   └─ test_epub.py
 ```
 
 说明：日志适配层目录名为 logging，位于 rag_data 包内，采用绝对导入避免与标准库 logging 冲突；如仍担心歧义，可改名为 observability。
@@ -181,12 +178,12 @@ rag-data
 
 任务：
 
-- 在 ingestion 的 chunking.py 实现 build_semantic_chunks（text、max_chars、overlap_sents）
+- 在 parsers/base.py 的 DocumentParser 提供句柄加载，各解析器子类自持 parse 与 chunk 规则
 - 复用文档示例逻辑，补齐边界处理：空文本、超长单句、overlap 大于已累积句数
 - 保持纯函数、无 IO，便于单元测试
 - 以 LoggerAdapter 记录超长单句等告警，不直接依赖某个日志框架
 
-交付：chunking.py
+交付：parsers/base.py 的句柄加载 + parsers/<format>.py 的子类 parse、chunk
 验收：单测覆盖 空文本、单句、恰好等于上限、需 overlap 的跨块、超长单句
 
 ### M4 向量库 Schema（1 人天，已移除）
@@ -211,12 +208,12 @@ rag-data
 
 - embedding：provider 注册表与 openai、qwen 实现，批量 embedding，输出维度需与 storage.vector_dim 一致
 - ingestion 的 entities.py：spaCy NER 抽取实体列表
-- ingestion 的 parsers.py：PDF、Word、Markdown 转带层级文本，清理页眉页脚与断词
+- parsers/：PDF、Word、Markdown 转带层级文本，清理页眉页脚与断词
 - ingestion 的 pipeline.py：解析 到 切块 到 实体抽取 到 向量化 到 upsert，支持分批与幂等
 - 全链路以 pydantic 模型传递数据，构造 MilvusRecord 时自动校验维度与字段
 - 记录类可由配置指定，写入与读回共用同一个类
 
-交付：embedder.py、entities.py、parsers.py、pipeline.py
+交付：embedder.py、entities.py、parsers/、pipeline.py
 验收：样例文档端到端跑通，写入条数正确，重复导入幂等
 
 ### M6 公共入口与流程门面（1 人天）
@@ -246,8 +243,8 @@ rag-data
 - logging.factory.configure_logging（settings）返回 LoggerAdapter
 - logging.factory.get_logger（name）返回 LoggerAdapter
 - logging.base.LoggerAdapter：debug、info、warning、error、exception、bind、context
-- ingestion.parsers.parse_document（path）返回纯文本字符串
-- ingestion.chunking.build_semantic_chunks（text，max_chars 默认 250，overlap_sents 默认 1，nlp 可选，logger 可选）返回切块列表
+- parsers.parse_document（path）返回纯文本字符串
+- parsers.chunk_document（path，text，max_chars 默认 250，overlap_sents 默认 1，nlp 可选，logger 可选）按扩展名派发到该格式的 chunk
 - ingestion.entities.extract_entities（text，nlp 可选）返回实体列表
 - embedding.embedder.Embedder.encode（texts）返回向量列表
 - ingestion.pipeline.IngestionPipeline：ingest_file（path，user_id 可选）、run（paths，user_id 可选）返回携带向量的切块列表
@@ -327,7 +324,7 @@ RagData（facade）              表现层：流程门面
    |
 IngestionPipeline            应用编排层
    |
-parsers、chunking、entities、embedder   领域服务层
+parsers、entities、embedder   领域服务层
 
 
 config.Settings（pydantic-settings）   横切层：类型安全的只读配置
@@ -496,24 +493,37 @@ def get_logger(name: str) -> LoggerAdapter: ...
 
 #### 11.3.3 ingestion 子包
 
-##### parsers.py
+##### parsers/（基类与子类）
 
-- 职责：按扩展名分派解析器，输出带 Markdown 层级的纯文本，自动清理页眉页脚与换行断词
-- 接口：def parse_document(path: str, logger=None) -> str
-- 依赖：unstructured 或 MinerU；采用惰性导入，缺失时抛 ParserDependencyError
-- TODO：PDF 与 Word 的解析尚未实现，文本类文档已支持
+目录：__init__.py（派发）、markdown.py、txt.py、epub.py、pdf.py、word.py。
 
-##### chunking.py
+- 职责：按扩展名派发到各 DocumentParser 子类，输出纯文本
+- 接口：parse_document(path: str, logger=None) -> str；各子类统一暴露 SUFFIXES 并实现 parse、chunk
+- 派发：__init__ 汇总各模块 SUFFIXES，得到「扩展名 → parse」派发表；新增格式只需实现约定并登记
+- 后缀分组：MARKDOWN 为 .md 与 .markdown；TXT 为 .txt；EPUB 为 .epub；PDF 为 .pdf；WORD 为 .docx 与 .doc；TEXT 为 MARKDOWN 并 TXT，BINARY 为 PDF 并 WORD
+- 依赖：unstructured 或 MinerU（PDF 与 Word）、ebooklib 与 BeautifulSoup（EPUB）；一律惰性导入，缺失时抛 ParserDependencyError
+- 已支持：Markdown、TXT 直读；EPUB 按 spine 顺序提取正文，并排除目录页与样式等非正文项
+- EPUB 另有 chunk(text, max_chars, overlap_sents, nlp) 与其它格式同签名，规则自持
+- TODO：PDF 与 Word 的解析尚未实现；Markdown 目前保留原始标记
 
-- 职责：两阶段语义切块，一阶段按版面段落，二阶段按句级切分并保留重叠
-- 接口：def build_semantic_chunks(text, max_chars=250, overlap_sents=1, nlp=None, logger=None) -> List[str]
-- 设计：nlp 句柄可注入以便测试；纯函数无 IO；超长单句单独成块并通过 LoggerAdapter 记录告警
+##### parsers/base.py 的句柄加载
+
+- 职责：spaCy 句柄的按需加载与缓存，供装配层（facade）与需要严格句柄的格式共用
+- 接口：DocumentParser.load_nlp(model_name=DEFAULT_MODEL, logger=None) 与 clear_cache()
+- 设计：未装 spaCy 或模型缺失时返回 None 并告警；自动补 sentencizer 以支持句级切分；成功与失败均缓存，clear_cache() 可重建
+
+
+##### parsers/base.py 与各格式 chunk
+
+- 职责：各 parsers/<format>.py 的子类自持 parse 与 chunk 规则；基类只提供句柄加载
+- 接口：各格式 chunk(text, max_chars, overlap_sents, nlp, logger) 与 parse(path, logger)
+- 设计：切块规则随格式不同，由各子类自行实现；nlp 由装配层注入，传 None 时按各子类规则处理
 
 ##### entities.py
 
-- 职责：基于 spaCy NER 抽取实体，用于标量索引与后续过滤
-- 接口：def extract_entities(text, nlp=None) -> List[str]
-- 设计：去重且保持首次出现顺序，大小写归一
+- 职责：基于 spaCy NER 抽取实体，供切块元数据与后续过滤使用
+- 接口：def extract_entities(text, nlp=None, *, labels=None) -> List[str]
+- 设计：句柄由调用方注入，未注入（None）则不抽取；归一化（去空白、剥包裹引号括号）、过滤纯标点、大小写不敏感去重，并可选按实体类型白名单过滤
 
 ##### pipeline.py
 
@@ -758,7 +768,7 @@ class MilvusVectorStore:
 离线导入链路（唯一链路），全链路以 pydantic 模型传递并伴随日志埋点：
 
 ```text
-parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.encode（分批）  ->  回填 vector（model_copy）  ->  DocumentChunk
+parse_document  ->  chunk_document  ->  extract_entities  ->  Embedder.encode（分批）  ->  回填 vector（model_copy）  ->  DocumentChunk
 ```
 
 横切能力在链路两端生效：
@@ -813,8 +823,9 @@ parse_document  ->  build_semantic_chunks  ->  extract_entities  ->  Embedder.en
 | test_models.py | pydantic 模型 | DocumentChunk 约束与冻结、向量默认值与回填 |
 | test_config.py | Settings | 默认值、环境变量覆盖、代码硬编码优先、分区名校验、Literal 与区间校验 |
 | test_logging.py | LoggerAdapter | 三后端参数化输出、bind 与 context、auto 探测与回退 |
-| test_chunking.py | build_semantic_chunks | 空文本、单句、恰好等于上限、跨块重叠、超长单句 |
-| test_entities.py | extract_entities | 去重、大小写归一、空文本 |
+| test_entities.py | extract_entities | 去重、大小写归一、空文本、默认句柄加载、类型过滤、归一化与过滤规则 |
+| test_base.py | DocumentParser | 抽象契约与文件读取、spaCy 句柄加载与缓存、失败降级、clear_cache |
+| test_epub.py | EPUB 解析 | 后缀、依赖缺失报错、章节顺序、目录页排除、非文档项排除、清洗、损坏容器报错、chunk 切块（分组、重叠、空句、模型缺失）|
 | test_embedder.py | Embedder | 批次切分、维度校验、假模型注入 |
 | test_embedding_provider.py | 嵌入模型注册表 | 内置 provider、继承即注册、配置解析、API Key 来源、请求构造、响应解析、错误包装、配置驱动切换、批量上限 |
 | test_pipeline.py | IngestionPipeline | 端到端向量化、幂等、分批切分、缺失文件 |
@@ -835,7 +846,7 @@ from rag_data import Settings, RagData
 | 版本 | __version__ |
 | 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
 | 数据模型 | DocumentChunk |
-| 导入管道 | IngestionPipeline、parse_document、build_semantic_chunks、extract_entities |
+| 导入管道 | IngestionPipeline、parse_document、extract_entities |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 日志适配 | LoggerAdapter、configure_logging、get_logger |
 | 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
