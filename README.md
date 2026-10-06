@@ -1,14 +1,14 @@
 # rag-data
 
-历史文本数据导入与向量化管道。范围聚焦离线批量导入链路：文档解析、两阶段语义切块、实体抽取、向量化；向量落库流程待后续重新设计，不含在线召回模块。
+历史文本数据导入与向量化管道。范围聚焦离线批量导入链路：文档解析、分块、向量化；向量落库流程待后续重新设计，不含在线召回模块。
 
 ## 特性
 
-- 两阶段语义切块与实体抽取：先分段再按句切分（优先 spaCy，缺失时标点回退）；实体经 NER 抽取并归一化去重；spaCy 句柄由门面加载并缓存，逐级注入切块与实体抽取
-- 文档解析：Markdown、TXT、EPUB 直读；EPUB 由 ebooklib 与 BeautifulSoup 提取正文并排除目录页，PDF 与 Word 待补
+- 按格式切块：切块规则由各解析器自持（递归切分 + 四分之一重叠前缀）；spaCy 句柄由门面加载并缓存，逐级注入切块
+- 文档解析：TXT、Markdown、EPUB、PDF、Word；EPUB 以 ebooklib 与 BeautifulSoup 提取并排除目录页，PDF 以 pdfplumber 按物理坐标提取并过滤页眉页脚，Word 以 python-docx 提取段落
 - pydantic v2 数据模型与 pydantic-settings 配置，边界即校验
 - 日志适配层：标准库 logging、loguru、structlog 三后端可切换
-- 向量化产物：切块携带稠密向量，同一 DocumentChunk 模型贯穿全链路
+- 向量化：Embedder 封装 provider（openai、qwen），字符串直接编码为稠密向量
 - 嵌入模型抽象：OpenAI 与通义千问内置实现，配置切换，自带 HTTP 调用无额外依赖
 
 ## 环境与依赖管理
@@ -49,7 +49,7 @@ uv pip install -e ".[epub,loguru]"
 uv pip install -e ".[dev]"
 
 # 或一次性安装全部可选与开发依赖
-uv pip install -e ".[parsers,embedding,epub,loguru,structlog,dev]"
+uv pip install -e ".[parsers,embedding,epub,pdf,word,loguru,structlog,dev]"
 ```
 
 激活虚拟环境：
@@ -82,8 +82,8 @@ hatch 环境直接读取 pyproject.toml 的依赖声明，已定义两套：
 
 | 环境 | 名称 | 包含依赖 |
 | :--- | :--- | :--- |
-| 默认环境 | default | parsers、embedding、loguru、structlog、dev |
-| 开发环境 | rag_data_dev | parsers、embedding、epub、loguru、structlog、dev |
+| 默认环境 | default | parsers、embedding、epub、loguru、structlog、dev |
+| 开发环境 | rag_data_dev | parsers、embedding、epub、pdf、word、loguru、structlog、dev |
 
 ```bash
 # 创建环境
@@ -109,6 +109,7 @@ hatch run format
 hatch run rag_data_dev:test
 hatch run rag_data_dev:types
 hatch run rag_data_dev:check
+hatch run rag_data_dev:pytest -rs #查看具体信息
 
 # 进入交互式 shell
 hatch shell
@@ -137,8 +138,9 @@ hatch publish
 from rag_data import RagData
 
 app = RagData.create()                 # 一次装配全部流程
-chunks = app.ingest(["README.md"])     # 流程：批量向量化
-print(len(chunks), chunks[0].vector[:3])
+text = app.parse("README.md")          # 流程：解析为纯文本
+chunks = app.chunk("README.md", text)  # 流程：按格式切块
+vectors = app.vectorize(["一段文本"])    # 流程：字符串向量化
 ```
 
 ## 公共 API
@@ -147,7 +149,7 @@ print(len(chunks), chunks[0].vector[:3])
 
 ```python
 import rag_data
-from rag_data import Settings, IngestionPipeline
+from rag_data import Settings, RagData
 ```
 
 导出内容按用途分组：
@@ -155,15 +157,14 @@ from rag_data import Settings, IngestionPipeline
 | 分组 | 导出符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
-| 数据模型 | DocumentChunk |
-| 导入管道 | IngestionPipeline、parse_document、extract_entities |
+| 配置 | Settings、ParsingSettings、EmbeddingSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
+| 解析 | parse_document |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
-| 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
+| 流程门面 | RagData、vectorize、build_settings、build_logger、build_nlp、build_embedder |
 | 日志适配 | LoggerAdapter、configure_logging、get_logger |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError |
 
-切块向量化后 vector 字段填入，DocumentChunk 同时承载元数据与稠密向量，供后续落库流程直接消费。
+解析产出纯文本，切块产出分块列表，向量化直接返回稠密向量；落库流程待存储层重新设计后补全。
 
 
 ## 流程门面
@@ -173,9 +174,9 @@ facade.py 把各流程的调用方法集中封装，调用方不必再逐个导�
 ```python
 from rag_data import RagData
 
-app = RagData.create()                # 装配配置、日志、向量化、管道
-app.ingest(["a.md", "b.md"], user_id="tenant-a")  # 流程：向量化文件
-app.ingest_file("c.md")               # 流程：向量化单文件
+app = RagData.create()                # 装配配置、日志、句柄与向量化
+text = app.parse("a.md")               # 流程：解析文件为文本
+chunks = app.chunk("a.md", text)       # 流程：按格式切块
 app.vectorize(["一段文本"])             # 流程：向量化字符串
 ```
 
@@ -187,8 +188,6 @@ app.vectorize(["一段文本"])             # 流程：向量化字符串
 | build_logger(settings) | 装配日志适配层 |
 | build_nlp(settings, logger) | 加载 spaCy 句柄，不可用则降级为 None |
 | build_embedder(settings, logger, model) | 装配向量化组件 |
-| build_pipeline(settings, embedder, logger, nlp) | 装配导入管道 |
-| ingest(paths, source, user_id) | 一键向量化文件 |
 | vectorize(texts, source) | 一键向量化字符串 |
 
 ```python
@@ -199,17 +198,17 @@ logger = build_logger(settings)
 embedder = build_embedder(settings, logger)
 ```
 
-RagData 一次装配后可反复调用，配置、日志、向量化组件与管道都挂在实例上：
+RagData 一次装配后可反复调用，配置、日志、句柄与向量化组件都挂在实例上：
 
 ```python
 from rag_data import RagData
 
 app = RagData.create()
-chunks = app.ingest(["doc.md"])      # 文件 → 携带向量的切块
+text = app.parse("doc.md")           # 文件 → 纯文本
 vectors = app.vectorize(["一段文本"])   # 字符串 → 稠密向量
 ```
 
-字符串向量化不产生切块元数据，直接返回与输入同序的向量列表；
+字符串向量化返回与输入同序的向量列表；
 app.vectorize_text(text) 返回单个向量。两者都经过 Embedder，维度按 embedding.dim 校验。
 
 
@@ -317,18 +316,6 @@ embedder = Embedder(settings, logger, model=my_model)
 注入对象可选提供 max_batch_size 以限制单次条数。
 
 
-## 数据模型
-
-向量化链路上有两个模型：
-
-| 字段 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| chunk_id、user_id、source_path、text、entities、created_at | - | 切块元数据，冻结不可变 |
-| vector | List[float] | 向量化后填入，默认空表示尚未向量化 |
-
-chunk_id 由内容哈希生成，同一文件重复导入得到相同 id，便于后续落库时保持幂等。
-
-
 ## 配置
 
 配置按模块分区，默认读取环境变量，也可在代码中硬编码，模型定义在 config.py。
@@ -347,9 +334,8 @@ chunk_id 由内容哈希生成，同一文件重复导入得到相同 id，便�
 
 | 分区 | 主要字段 |
 | :--- | :--- |
-| chunking | max_chars、overlap_sents |
+| parsing | spacy_model、max_chars |
 | embedding | provider、model、dim、batch_size、api_key、base_url、timeout |
-| nlp | spacy_model |
 | logging | backend、level、json |
 
 ### 加载方式
@@ -404,12 +390,8 @@ src/rag_data
 - __init__.py        公共入口，统一导出全部 API
 - config.py          pydantic-settings 配置
 - registry.py        通用注册表基类，provider 注册表复用
-- models             pydantic 数据模型包，按职责分文件
-  - __init__.py      公共导出，保持 rag_data.models 入口不变
-  - document.py      DocumentChunk（含 vector）
 - exceptions.py      领域异常
 - facade.py          流程门面，一站式封装各流程调用
-- ingestion          解析、切块、实体抽取、向量化编排
 - parsers            文档解析器：DocumentParser 基类 + 各格式子类（markdown、txt、epub、pdf、word）
 - embedding          向量化接口、provider 注册表与 openai、qwen 实现
 - logging            日志适配层
@@ -419,7 +401,7 @@ src/rag_data
 
 以下复杂逻辑以 TODO 标注，待人工补全：
 
-- 文档解析：PDF 与 Word，基于 unstructured 或 MinerU
+- 解析细化：PDF 双栏、Word 表格等版面级处理
 - 向量化：兼容 embedding 接口的本地模型（如 sentence-transformers）provider
 - 数据保存：向量落库流程待存储层重新设计后补全
 

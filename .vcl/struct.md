@@ -1,28 +1,28 @@
 # rag-data 项目结构
 
-> 版本 0.1.0 · Python >=3.8 · src 布局 · 公共导出 47 个符号
+> 版本 0.1.0 · Python >=3.8 · src 布局 · 公共导出 39 个符号
 
 本文档描述仓库的物理结构与模块职责，是阅读代码与二次开发的导航图。
 设计取舍与开发计划见 plan/DEVELOPMENT_PLAN.md，使用方式见 README.md。
 
 > 存储层（向量库实现、后端注册表、落库配置与相关测试）已整体移除，
-> 当前聚焦「解析 → 切块 → 实体 → 向量化」；向量落库流程待重新设计后补全。
+> 当前聚焦「解析 → 切块 → 向量化」；向量落库流程待重新设计后补全。
 
 ---
 
 ## 1. 概览
 
-rag-data 是「历史文本导入与向量化」管道：把文件解析为句子级切块，抽取实体，
-编码为稠密向量，产出携带向量的切块；也支持字符串直接向量化。
-整体分为六层，层间只依赖下层，方向单一。
+rag-data 是「历史文本导入与向量化」管道：把文件解析为分块，
+编码为稠密向量；也支持字符串直接向量化。
+整体分为五层，层间只依赖下层，方向单一。
 
 
 | 层 | 包 | 职责 |
 | :--- | :--- | :--- |
 | 配置层 | config.py | 分区配置模型，环境变量与代码硬编码 |
-| 契约层 | models/、exceptions.py | 数据模型、领域异常 |
+| 契约层 | exceptions.py | 领域异常 |
 | 通用设施 | registry.py、logging | 通用注册表、日志适配层 |
-| 领域服务 | ingestion、embedding | 解析切块、实体抽取、向量化 |
+| 领域服务 | parsers、embedding | 解析切块与向量化 |
 | 门面层 | facade.py | 分流程装配 + 一站式调用 |
 | 公共入口 | __init__.py | 统一导出，外部只依赖包根 |
 
@@ -41,26 +41,20 @@ rag-data/
 ├─ src/
 │  └─ rag_data/
 │     ├─ __about__.py         版本号（hatch 版本来源）
-│     ├─ __init__.py          公共入口，统一导出 47 个符号
+│     ├─ __init__.py          公共入口，统一导出 39 个符号
 │     ├─ py.typed             类型标记（PEP 561）
 │     ├─ config.py            分区配置模型与环境变量解析
 │     ├─ exceptions.py        领域异常层次
 │     ├─ registry.py          通用类型注册表（嵌入 provider 复用）
 │     ├─ facade.py            流程门面与一键入口
-│     ├─ models/
-│     │  ├─ __init__.py       公共导出
-│     │  └─ document.py       DocumentChunk（含向量字段）
-│     ├─ ingestion/          解析 - 切块 - 实体 - 向量化编排
-│     │  ├─ entities.py       实体抽取（NER，归一化去重）
-│     │  └─ pipeline.py       向量化编排：切块 - 编码 - 回填向量
 │     ├─ parsers/            文档解析，一种格式一个 DocumentParser 子类
 │     │  ├─ __init__.py      汇总 PARSERS 并按扩展名派发 parse_document 与 chunk_document
-│     │  ├─ base.py          DocumentParser 基类：SUFFIXES、parse 与 chunk 契约、句柄加载
+│     │  ├─ base.py          DocumentParser 基类：SUFFIXES、parse 与 chunk 契约、NLP 原语与句柄加载
 │     │  ├─ markdown.py      MarkdownParser：.md、.markdown，按井号分章后递归切块
 │     │  ├─ txt.py           TxtParser：.txt，整篇递归切块
 │     │  ├─ epub.py          EpubParser：.epub，章节提取（排除目录页）与按井号分章递归切块
-│     │  ├─ pdf.py           PdfParser：.pdf，解析与切块待实现
-│     │  └─ word.py          WordParser：.docx、.doc，解析与切块待实现
+│     │  ├─ pdf.py           PdfParser：.pdf，按页提取（pdfplumber）与整篇递归切块
+│     │  └─ word.py          WordParser：.docx，段落提取（python-docx）与整篇递归切块
 │     ├─ embedding/          向量化：抽象、注册表、内置 provider
 │     │  ├─ base.py            BaseEmbeddingProvider 抽象
 │     │  ├─ registry.py        provider 注册表
@@ -74,7 +68,7 @@ rag-data/
 │        ├─ stdlib_adapter.py  标准库 logging 适配
 │        ├─ loguru_adapter.py  loguru 适配
 │        └─ structlog_adapter.py structlog 适配
-└─ tests/                   单元测试（10 个测试文件 + conftest，106 项）
+└─ tests/                   单元测试（6 个测试文件 + conftest，71 项）
 ```
 
 ---
@@ -88,10 +82,8 @@ __init__（公共入口）
     │
 facade（流程门面）
     ├── config           分区配置
-    ├── models           数据模型
     ├── logging          日志适配层
-    ├─ ingestion         解析、切块、实体、向量化编排
-    │      └── embedding  向量化
+    ├─ parsers           文档解析与切块
     └── embedding         向量化（门面直接持有 Embedder）
               ▲
               │  注册表反向登记：
@@ -121,16 +113,15 @@ from rag_data import Settings, RagData
 from rag_data import register_embedding, BaseEmbeddingProvider
 ```
 
-导出 47 个符号，分组见 6.2 节。
+导出 39 个符号，分组见 6.2 节。
 
 ### 4.3 config.py
 
 职责：以嵌套模型承载分区配置，实例化即校验；默认读环境变量，支持代码硬编码。
 
 ```python
-class ChunkingSettings(BaseModel): ...    # 切块
+class ParsingSettings(BaseModel): ...     # 解析：spacy_model 与 max_chars
 class EmbeddingSettings(BaseModel): ...   # 向量化
-class NLPSettings(BaseModel): ...         # 分词与实体
 class LoggingSettings(BaseModel): ...     # 日志
 
 ENV_PREFIX = "RAG_"
@@ -155,26 +146,7 @@ class Settings(BaseSettings):
 
 优先级：代码硬编码 > 环境变量与 .env > 字段默认值。
 
-### 4.4 models/
-
-职责：跨层数据契约。当前只有一个模型 DocumentChunk，切块与向量同体。
-
-| 字段 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| chunk_id | str | 主键，由内容哈希生成，重复导入幂等 |
-| user_id | str | 数据归属 |
-| source_path | str | 来源文件路径 |
-| text | str | 切块正文 |
-| entities | List[str] | 实体列表 |
-| created_at | float | 创建时间戳 |
-| vector | List[float] | 向量化后填入；默认空表示尚未向量化 |
-
-要点：
-
-1. model_config 为 frozen，实例不可变；向量化用 model_copy(update={...}) 回填 vector
-2. 维度不由模型校验，由 Embedder 按 embedding.dim 统一校验
-
-### 4.5 exceptions.py
+### 4.4 exceptions.py
 
 单一根异常，便于上层统一捕获。
 
@@ -188,7 +160,7 @@ RagDataError
 └─ EmbeddingError         向量化失败
 ```
 
-### 4.6 registry.py（通用注册表）
+### 4.5 registry.py（通用注册表）
 
 嵌入模型使用的注册表，dict 子类，支持惰性导入与统一实例化。
 
@@ -204,7 +176,7 @@ class Registry(dict):
 
 登记类对象而非路径，可让函数内定义的本地类也能注册（qualname 含 locals 无法再导入）。
 
-### 4.7 logging/
+### 4.6 logging/
 
 把三种日志库收敛到同一接口，调用方只依赖 LoggerAdapter。
 
@@ -223,35 +195,23 @@ backend 配置为 auto 时按可用性择一；两个可选后端未安装时回
 ---
 ## 5. 领域服务层
 
-### 5.1 ingestion/（离线导入）
-
+### 5.1 parsers(解析与切块)
 
 ```text
 文件 ─ parse_document ─ 文本 ─ chunk_document ─ 切块
-                                          │
-                                extract_entities 抽实体
-                                          │
-                                     Embedder.encode 分批编码
-                                          │
-                            model_copy 回填 vector ─ DocumentChunk
 ```
 
 | 文件 | 关键符号 | 说明 |
 | :--- | :--- | :--- |
 | parsers/ | parse_document、chunk_document | 按扩展名派发到 DocumentParser 子类；各格式规则自持 |
-| parsers/base.py | DocumentParser | 抽象基类：声明 SUFFIXES 与 parse(path, logger)、chunk(text, ...)；并承载句柄加载 load_nlp、clear_cache |
-| parsers/epub.py | EpubParser.parse | 按 spine 顺序提取章节正文，排除目录页与非正文项 |
-| entities.py | extract_entities(text, nlp=None, labels=None) | NER 抽取，归一化去重；句柄由调用方注入，未注入则不抽取 |
-| pipeline.py | IngestionPipeline | 编排，方法 run(paths, user_id) 与 ingest_file(path, user_id) |
+| parsers/base.py | DocumentParser | 抽象基类：SUFFIXES 与 parse、chunk 契约；句柄加载 load_nlp、clear_cache 与分句 split_sentences、重叠前缀 _extract_overlap_prefix、递归切块 _process_text_recursive |
+| parsers/txt.py | TxtParser | .txt，整篇递归切块 |
+| parsers/markdown.py | MarkdownParser | .md、.markdown，按行首井号分章后递归切块 |
+| parsers/epub.py | EpubParser | .epub，按 spine 提取章节（排除目录页）后按井号分章递归切块 |
+| parsers/pdf.py | PdfParser | .pdf，pdfplumber 按物理坐标提取、过滤页眉页脚后整篇递归切块 |
+| parsers/word.py | WordParser | .docx，python-docx 提取段落，整篇递归切块 |
 
-切块参数来自 chunking 分区：max_chars（150 到 300）、overlap_sents。
-
-Pipeline 约定：
-
-1. chunk_id 由 user_id、source_path 与切块文本做 sha256 生成，重复导入得到相同 id
-2. 按 embedding.batch_size 分批编码，降低单次请求压力
-3. 向量经 model_copy 回填到 frozen 的 DocumentChunk.vector
-4. 每个阶段绑定 source_path 与 user_id，便于链路定位
+切块由各解析器自持：基类提供递归切分与四分之一重叠前缀；单块上限 max_chars 为解析器构造参数（默认 1000，基类 500）。
 
 ### 5.2 embedding/（向量化）
 
@@ -316,7 +276,6 @@ Embedder 的批次策略：取 embedding.batch_size 与 provider 的 max_batch_s
 | build_logger(settings) | 装配日志 |
 | build_nlp(settings, logger) | 加载 spaCy，不可用时降级为 None |
 | build_embedder(settings, logger, model=None) | 装配向量化 |
-| build_pipeline(settings, embedder, logger, nlp=None) | 装配导入管道 |
 
 RagData 是一次装配、逐流程调用的门面：
 
@@ -327,25 +286,24 @@ RagData.create(source=None, *, overrides=None, **kwargs)
 
 | 实例方法 | 说明 |
 | :--- | :--- |
-| ingest(paths, user_id=None) | 批量向量化文件，返回携带向量的切块列表 |
-| ingest_file(path, user_id=None) | 单文件向量化 |
+| parse(path) | 解析单个文件为纯文本 |
+| chunk(path, text) | 按文件扩展名切块，规则由对应解析器自持 |
 | vectorize(texts) | 批量向量化字符串，返回与输入同序的向量列表 |
 | vectorize_text(text) | 单条字符串向量化，返回单个向量 |
 
 全部依赖可注入，故测试可替换 embedder、logger、nlp。
-模块级一键入口 ingest 与 vectorize 内部自行装配后调用。
+模块级一键入口 vectorize 内部自行装配后调用。
 
-### 6.2 公共 API 导出（47 个符号）
+### 6.2 公共 API 导出（39 个符号）
 
 | 分组 | 符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 子包 | config、models、ingestion、embedding、logging |
-| 配置 | Settings、ChunkingSettings、EmbeddingSettings、NLPSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
-| 数据模型 | DocumentChunk |
-| 导入管道 | IngestionPipeline、parse_document、extract_entities |
+| 子包 | config、parsers、embedding、logging |
+| 配置 | Settings、ParsingSettings、EmbeddingSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
+| 解析 | parse_document |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
-| 流程门面 | RagData、ingest、vectorize、build_settings、build_logger、build_nlp、build_embedder、build_pipeline |
+| 流程门面 | RagData、vectorize、build_settings、build_logger、build_nlp、build_embedder |
 | 日志 | LoggerAdapter、configure_logging、get_logger |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError |
 
@@ -358,13 +316,9 @@ RagData.create(source=None, *, overrides=None, **kwargs)
 ### 7.1 文件向量化
 
 ```text
-1. RagData.create(overrides)     装配 settings、logger、nlp、embedder、pipeline
-2. app.ingest(paths, user_id)    逐文件向量化，返回切块列表
-     ├─ parse_document           读取文件为文本
-     ├─ chunk_document           按格式切块（各 DocumentParser 子类自持规则）
-     ├─ extract_entities         抽取实体
-     ├─ Embedder.encode          分批编码为向量
-     └─ 回填 vector              产出携带向量的 DocumentChunk
+1. RagData.create(overrides)     装配 settings、logger、nlp、embedder
+2. app.parse(path)               解析文件为纯文本
+3. app.chunk(path, text)         按格式切块（各 DocumentParser 子类自持规则）
 ```
 
 ### 7.2 字符串向量化
@@ -376,7 +330,7 @@ RagData.create(source=None, *, overrides=None, **kwargs)
      └─ 校验：逐条按 embedding.dim 校验，不一致抛 EmbeddingError
 ```
 
-字符串向量化不产生切块元数据，直接返回向量；向量落库流程待存储层重新设计后补全。
+字符串向量化直接返回向量；向量落库流程待存储层重新设计后补全。
 
 ---
 
@@ -386,9 +340,8 @@ RagData.create(source=None, *, overrides=None, **kwargs)
 
 | 分区 | 字段 |
 | :--- | :--- |
-| chunking | max_chars(250，限 150 到 300)、overlap_sents(1) |
+| parsing | spacy_model(zh_core_web_sm)、max_chars(1000) |
 | embedding | provider(openai)、model(空)、batch_size(128)、dim(1024)、api_key(空)、base_url(空)、timeout(60.0) |
-| nlp | spacy_model(zh_core_web_sm) |
 | logging | backend(auto)、level(INFO)、json(false) |
 
 三层来源，优先级由高到低：代码硬编码、环境变量与 .env、字段默认值。
@@ -434,10 +387,12 @@ tests/
 ├─ test_parsers_base.py   16 项   DocumentParser 分句、四分之一重叠前缀与递归切块
 ├─ test_parsers_epub.py   10 项   EpubParser 契约、初始化与 chunk 切块（含复杂内容与本机文件）
 ├─ test_parsers_txt.py    12 项   TxtParser 契约、解析、chunk 切块与本机文件
-└─ test_parsers_markdown.py 12 项  MarkdownParser 契约、解析、按井号分章切块与本机文件
+├─ test_parsers_markdown.py 12 项  MarkdownParser 契约、解析、按井号分章切块与本机文件
+├─ test_parsers_pdf.py    10 项   PdfParser 契约、解析依赖与异常、chunk 切块与本机文件
+└─ test_parsers_word.py   11 项   WordParser 契约、解析依赖与异常、标题映射与 chunk 切块
 ```
 
-当前合计 50 项通过。
+当前合计 71 项通过。
 
 ---
 
@@ -448,8 +403,10 @@ tests/
 | 组 | 包 |
 | :--- | :--- |
 | 核心 | pydantic、pydantic-settings |
-| parsers | unstructured、spacy |
+| parsers | unstructured、spacy、zh-core-web-sm |
 | epub | EbookLib、beautifulsoup4 |
+| pdf | pdfplumber |
+| word | python-docx |
 | embedding | sentence-transformers |
 | loguru | loguru |
 | structlog | structlog |
@@ -463,7 +420,7 @@ tests/
 
 | 位置 | 事项 |
 | :--- | :--- |
-| parsers/ | 各格式解析器，PDF 与 Word 基于 unstructured 或 MinerU |
+| parsers/ | 版面级解析细化，如 PDF 双栏、Word 表格 |
 | embedding | 兼容本地模型的 provider，如 sentence-transformers |
-| facade.py | build_nlp 的管道细化，按流程启用 ner 与句子边界 |
+| facade.py | 装配流程细化，按需启用句柄与向量化 |
 | 数据保存 | 向量落库流程，待存储层重新设计后补全 |

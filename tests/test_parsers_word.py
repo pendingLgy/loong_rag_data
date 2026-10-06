@@ -40,7 +40,7 @@ def test_word_parser_is_concrete_document_parser():
     parser = WordParser()
     assert isinstance(parser, DocumentParser)
     assert WordParser.__abstractmethods__ == frozenset()
-    assert {".docx", ".doc"} <= WordParser.SUFFIXES
+    assert WordParser.SUFFIXES == frozenset({".docx"})
 
 
 def test_word_default_max_chars():
@@ -113,7 +113,7 @@ def test_parse_rejects_legacy_doc_without_dependency():
 # ---------------- 解析行为（需 python-docx） ----------------
 
 
-def test_parse_maps_headings_to_hash_prefix(tmp_path):
+def test_parse_extracts_paragraphs_verbatim(tmp_path):
     docx = pytest.importorskip("docx", reason="解析 docx 需要 python-docx")
     document = docx.Document()
     document.add_heading("标题一", level=1)
@@ -124,7 +124,7 @@ def test_parse_maps_headings_to_hash_prefix(tmp_path):
 
     text = WordParser().parse(str(path))
     lines = text.split("\n")
-    assert "# 标题一" in lines
+    assert "标题一" in lines
     assert "正文一。" in lines
     assert "正文二。" in lines
 
@@ -157,9 +157,9 @@ def test_local_txt_parse_then_chunk():
     sample = text[:3000]
     chunks = parser.chunk(sample, _blank_zh_handle())
 
-    for chunk in chunks:
-        print(chunk)
-        print("--------- end ----------")
+    # for chunk in chunks:
+    #     print(chunk)
+    #     print("--------- end ----------")
 
     assert chunks, "切块结果不应为空"
     assert all(chunk.strip() for chunk in chunks)

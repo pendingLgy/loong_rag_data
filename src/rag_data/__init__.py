@@ -3,7 +3,7 @@
 # 外部调用只需引入本包，无需关心内部子包路径：
 #
 #   import rag_data
-#   from rag_data import Settings, IngestionPipeline
+#   from rag_data import Settings, RagData
 #
 # 本文件仅做统一导出，不承载任何业务逻辑；内部实现仍按模块分布在各自子包中。
 
@@ -11,10 +11,9 @@ from rag_data.__about__ import __version__
 from rag_data.config import (
     ENV_NESTED_DELIMITER,
     ENV_PREFIX,
-    ChunkingSettings,
     EmbeddingSettings,
     LoggingSettings,
-    NLPSettings,
+    ParsingSettings,
     Settings,
     load_env_overrides,
 )
@@ -44,50 +43,37 @@ from rag_data.facade import (
     build_embedder,
     build_logger,
     build_nlp,
-    build_pipeline,
     build_settings,
-    ingest,
     vectorize,
 )
-from rag_data.ingestion.entities import extract_entities
-from rag_data.parsers import parse_document
-from rag_data.ingestion.pipeline import IngestionPipeline
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import configure_logging, get_logger
-from rag_data.models import DocumentChunk
+from rag_data.parsers import parse_document
 
 __all__ = [
     "config",
-    "models",
-    "ingestion",
+    "parsers",
     "embedding",
     "logging",
     # 流程门面
     "RagData",
-    "ingest",
     "vectorize",
     "build_settings",
     "build_logger",
     "build_nlp",
     "build_embedder",
-    "build_pipeline",
     # 版本
     "__version__",
     # 配置
     "Settings",
-    "ChunkingSettings",
+    "ParsingSettings",
     "EmbeddingSettings",
-    "NLPSettings",
     "LoggingSettings",
     "load_env_overrides",
     "ENV_PREFIX",
     "ENV_NESTED_DELIMITER",
-    # 数据模型
-    "DocumentChunk",
-    # 导入管道
-    "IngestionPipeline",
+    # 解析
     "parse_document",
-    "extract_entities",
     # 向量化
     "Embedder",
     "BaseEmbeddingProvider",
@@ -112,3 +98,4 @@ __all__ = [
     "ParseError",
     "EmbeddingError",
 ]
+

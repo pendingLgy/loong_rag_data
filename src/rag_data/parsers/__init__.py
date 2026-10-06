@@ -7,8 +7,8 @@
 # markdown.py  MarkdownParser  .md、.markdown
 # txt.py       TxtParser       .txt
 # epub.py      EpubParser      .epub
-# pdf.py       PdfParser       .pdf（pypdf，按页提取）
-# word.py      WordParser      .docx（python-docx，标题映射为井号）
+# pdf.py       PdfParser       .pdf（pdfplumber，按物理坐标提取）
+# word.py      WordParser      .docx（python-docx，纯段落提取，不处理标题样式）
 # 新增格式：实现 DocumentParser 子类后加入 PARSERS 即可，
 # 后缀唯一性由 _build_index 的断言保证。
 

@@ -101,8 +101,7 @@ def test_chunk_real_sentencizer_complex_chinese():
 def test_parse_without_dependency_raises_parser_dependency_error(tmp_path, monkeypatch):
     path = tmp_path / "a.pdf"
     path.write_bytes(b"%PDF-1.4")
-    monkeypatch.setitem(sys.modules, "pymupdf", None)
-    monkeypatch.setitem(sys.modules, "fitz", None)
+    monkeypatch.setitem(sys.modules, "pdfplumber", None)
     with pytest.raises(ParserDependencyError):
         PdfParser().parse(str(path))
 
@@ -127,7 +126,9 @@ _LOCAL_PDF = _local_pdf()
 
 @pytest.mark.skipif(not _LOCAL_PDF or not os.path.exists(_LOCAL_PDF), reason="本机示例 pdf 不存在")
 def test_local_pdf_parse_then_chunk():
-    pytest.importorskip("pymupdf", reason="解析本机 pdf 需要 PyMuPDF")
+    pytest.importorskip("pdfplumber", reason="解析本机 pdf 需要 pdfplumber")
+    if os.path.getsize(_LOCAL_PDF) > 15 * 1024 * 1024:
+        pytest.skip("本机 pdf 过大，跳过以避免长耗时")
     parser = PdfParser(max_chars=500)
     text = parser.parse(_LOCAL_PDF)
     assert text.strip(), "解析结果不应为空"
@@ -136,9 +137,9 @@ def test_local_pdf_parse_then_chunk():
     sample = text[:10000]
     chunks = parser.chunk(sample, _blank_zh_handle())
 
-    for chunk in chunks:
-        print(chunk)
-        print("--------- end ----------")
+    # for chunk in chunks:
+    #     print(chunk)
+    #     print("--------- end ----------")
 
     assert chunks, "切块结果不应为空"
     assert all(chunk.strip() for chunk in chunks)

@@ -8,7 +8,7 @@
 # 环境变量命名规则：RAG_ 前缀，分区名与字段名大写，双下划线分隔，例如：
 #   RAG_EMBEDDING__PROVIDER=qwen
 #   RAG_EMBEDDING__DIM=1024
-#   RAG_CHUNKING__MAX_CHARS=250
+#   RAG_PARSING__SPACY_MODEL=zh_core_web_sm
 #   RAG_LOGGING__LEVEL=DEBUG
 #   RAG_LOGGING__JSON=true
 
@@ -24,15 +24,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_data.exceptions import ConfigError
 
-SECTION_CHUNKING = "chunking"
+SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
-SECTION_NLP = "nlp"
 SECTION_LOGGING = "logging"
 
 MODULE_SECTIONS: List[str] = [
-    SECTION_CHUNKING,
+    SECTION_PARSING,
     SECTION_EMBEDDING,
-    SECTION_NLP,
     SECTION_LOGGING,
 ]
 
@@ -41,13 +39,13 @@ ENV_PREFIX = "RAG_"
 ENV_NESTED_DELIMITER = "__"
 
 
-class ChunkingSettings(BaseModel):
-    """两阶段语义切块参数。"""
+class ParsingSettings(BaseModel):
+    """文档解析与切块参数：spaCy 句柄模型与默认单块字符上限。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    max_chars: int = Field(default=250, ge=150, le=300)
-    overlap_sents: int = Field(default=1, ge=0)
+    spacy_model: str = Field(default="zh_core_web_sm")
+    max_chars: int = Field(default=1000, gt=0)
 
 class EmbeddingSettings(BaseModel):
     """向量化参数：provider 决定实现，其余为通用与实现专属配置。"""
@@ -68,13 +66,6 @@ class EmbeddingSettings(BaseModel):
     base_url: str = Field(default="")
     timeout: float = Field(default=60.0, gt=0)
 
-class NLPSettings(BaseModel):
-    """分句与实体抽取参数。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    spacy_model: str = Field(default="zh_core_web_sm")
-
 class LoggingSettings(BaseModel):
     """日志适配层参数。json 为保留名，故字段名为 json_output 并设置别名。"""
 
@@ -87,9 +78,8 @@ class LoggingSettings(BaseModel):
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
-    SECTION_CHUNKING: ChunkingSettings,
+    SECTION_PARSING: ParsingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
-    SECTION_NLP: NLPSettings,
     SECTION_LOGGING: LoggingSettings,
 }
 
@@ -106,9 +96,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
+    parsing: ParsingSettings = Field(default_factory=ParsingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
-    nlp: NLPSettings = Field(default_factory=NLPSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     @classmethod
