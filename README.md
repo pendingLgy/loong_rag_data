@@ -9,7 +9,7 @@
 - pydantic v2 数据模型与 pydantic-settings 配置，边界即校验
 - 日志适配层：标准库 logging、loguru、structlog 三后端可切换
 - 向量化：Embedder 封装 provider（openai、qwen），字符串直接编码为稠密向量
-- 嵌入模型抽象：OpenAI 与通义千问内置实现，配置切换，自带 HTTP 调用无额外依赖
+- 嵌入模型抽象：OpenAI 与通义千问内置实现，配置切换，基于官方 openai SDK
 
 ## 环境与依赖管理
 
@@ -49,7 +49,7 @@ uv pip install -e ".[epub,loguru]"
 uv pip install -e ".[dev]"
 
 # 或一次性安装全部可选与开发依赖
-uv pip install -e ".[parsers,embedding,epub,pdf,word,loguru,structlog,dev]"
+uv pip install -e ".[parsers,embedding,epub,pdf,word,openai,milvus,loguru,structlog,dev]"
 ```
 
 激活虚拟环境：
@@ -83,7 +83,7 @@ hatch 环境直接读取 pyproject.toml 的依赖声明，已定义两套：
 | 环境 | 名称 | 包含依赖 |
 | :--- | :--- | :--- |
 | 默认环境 | default | parsers、embedding、epub、loguru、structlog、dev |
-| 开发环境 | rag_data_dev | parsers、embedding、epub、pdf、word、loguru、structlog、dev |
+| 开发环境 | rag_data_dev | parsers、embedding、milvus、epub、pdf、word、openai、loguru、structlog、dev |
 
 ```bash
 # 创建环境
@@ -92,6 +92,10 @@ hatch env create rag_data_dev
 
 # 查看已有环境
 hatch env show
+
+# 清理环境
+hatch env prune #清理所有环境
+hatch env prune -e parsers # 使用 -e 或 --env 参数指定某个具体的环境名称（如 dev、parsers、test）：****
 
 # 查看已安装依赖
 hatch run rag_data_dev:pip list
@@ -110,6 +114,8 @@ hatch run rag_data_dev:test
 hatch run rag_data_dev:types
 hatch run rag_data_dev:check
 hatch run rag_data_dev:pytest -rs #查看具体信息
+hatch run rag_data_dev:pytest -- tests/test_integration_qwen_epub_milvus.py -rs
+hatch run rag_data_dev:pytest tests/test_integration_qwen_epub_milvus.py::test_chunk_returns_non_empty_blocks -rs
 
 # 进入交互式 shell
 hatch shell
@@ -161,7 +167,7 @@ from rag_data import Settings, RagData
 | 解析 | parse_document |
 | 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
 | 流程门面 | RagData、vectorize、build_settings、build_logger、build_nlp、build_embedder |
-| 日志适配 | LoggerAdapter、configure_logging、get_logger |
+| 日志适配 | LoggerAdapter、LoggerFactory、StdlibLogAdapter、StructlogAdapter、LoguruAdapter |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError |
 
 解析产出纯文本，切块产出分块列表，向量化直接返回稠密向量；落库流程待存储层重新设计后补全。
@@ -224,8 +230,8 @@ app.vectorize_text(text) 返回单个向量。两者都经过 Embedder，维度�
 | openai | OpenAIEmbeddingProvider | text-embedding-3-small | 1536 | OPENAI_API_KEY |
 | qwen | QwenEmbeddingProvider | qwen3.7-text-embedding | 1024 | DASHSCOPE_API_KEY |
 
-qwen 复用 OpenAI 的请求格式（DashScope 兼容模式），差异仅在默认模型、接口地址、
-API Key 环境变量与单次批量上限（10 条）。
+两个内置 provider 都基于官方 openai SDK；qwen 复用同一请求格式（DashScope 兼容模式），
+差异仅在默认模型、接口地址、API Key 环境变量与单次批量上限（10 条）。
 
 ```python
 from rag_data import available_embedding_providers
@@ -334,9 +340,9 @@ embedder = Embedder(settings, logger, model=my_model)
 
 | 分区 | 主要字段 |
 | :--- | :--- |
-| parsing | spacy_model、max_chars |
+| parsing | spacy_model、max_chars（默认 500）、safe_max_chars（默认 2000） |
 | embedding | provider、model、dim、batch_size、api_key、base_url、timeout |
-| logging | backend、level、json |
+| logging | backend、level、format、timezone |
 
 ### 加载方式
 
@@ -355,7 +361,7 @@ settings = Settings.load(use_env=False)   # 忽略环境变量：仅用字段默
 ```python
 settings = Settings.load(
     embedding={"provider": "qwen", "dim": 1024},
-    chunking={"max_chars": 180},
+    parsing={"max_chars": 180, "safe_max_chars": 2000},
 )
 settings = Settings.load({"embedding": {"provider": "qwen"}})   # 也可直接传字典
 ```
@@ -377,11 +383,33 @@ app = RagData.create(overrides={"embedding": {"provider": "qwen"}})
 RAG_EMBEDDING__PROVIDER=qwen
 RAG_EMBEDDING__DIM=512
 RAG_LOGGING__LEVEL=DEBUG
-RAG_LOGGING__JSON=true
+RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(funcName)s() %(lineno)d] %(message)s
+RAG_LOGGING__TIMEZONE=Asia/Shanghai
 ```
 
 取值按字段类型自动转换，对象与数组按 JSON 书写。
 分区名或字段名写错会抛 ConfigError，并列出可用值。
+
+### 日志后端与格式
+
+后端、级别、格式与时区由 logging 分区配置，门面装配时注入工厂：
+
+```python
+settings = Settings.load(logging={
+    "backend": "structlog",        # stdliblog（默认）、structlog、loguru
+    "level": "INFO",
+    "timezone": "Asia/Shanghai",   # 留空用系统本地时区
+})
+```
+
+人类可读行含源文件完整路径、方法名与行号：
+
+```text
+2026-10-07 18:42:50+0800 [INFO] [F:\workspace\src\rag_data\facade.py:98 parse()] 完成
+```
+
+format 留空时，优先取 pyproject 的 log_cli_format，再回退内置默认（均含完整路径与行号）。
+时区可填 UTC 或 IANA 名（需 Python 3.9 及以上），留空用系统本地；无法识别时装配报错。
 
 ## 目录结构
 
@@ -394,7 +422,7 @@ src/rag_data
 - facade.py          流程门面，一站式封装各流程调用
 - parsers            文档解析器：DocumentParser 基类 + 各格式子类（markdown、txt、epub、pdf、word）
 - embedding          向量化接口、provider 注册表与 openai、qwen 实现
-- logging            日志适配层
+- logging            日志适配层：LoggerFactory 与 stdlib、loguru、structlog 三个适配器
 ```
 
 ## 待实现（TODO）
@@ -431,6 +459,17 @@ uv run pytest
 
 ### 集成测试
 
-存储层移除后，原 Qwen + Milvus 集成测试已一并删除；落库流程重新设计后按需重建。
+tests/test_integration_qwen_epub_milvus.py 是手工集成测试：真实解析 EPUB、切块、
+调用 Qwen 嵌入、写入 Milvus 并做相似度检索。默认由 addopts 的 -m 'not integration' 跳过，
+需备好凭据与 Milvus 服务后显式指定标记执行：
+
+```bash
+# Windows PowerShell
+$env:DASHSCOPE_API_KEY = "sk-xxx"
+$env:RAG_IT_MILVUS_URI = "http://127.0.0.1:19530"
+hatch run rag_data_dev:pytest -m integration -v -s
+```
+
+环境变量、默认集合名与安全约定见该文件头部注释。
 
 详细设计见 plan/DEVELOPMENT_PLAN.md。

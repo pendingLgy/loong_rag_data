@@ -18,10 +18,10 @@ class MarkdownParser(DocumentParser):
 
     SUFFIXES = frozenset({".md", ".markdown"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
-        super().__init__(max_chars, safe_max_chars)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
+        super().__init__(max_chars, safe_max_chars, logger)
 
-    def parse(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse(self, path: str) -> str:
         """读取 Markdown 原文；标题、强调、链接等标记保留。"""
         # TODO: 如需纯语义文本，可在此剥离 Markdown 标记后再返回。
         return self._read_text(path)
@@ -30,7 +30,6 @@ class MarkdownParser(DocumentParser):
         self,
         text: str,
         nlp: Any = None,
-        logger: Optional[LoggerAdapter] = None,
     ) -> List[str]:
         """切块规则：按 # 切出章节，逐章递归切分，块间带上文四分之一重叠。"""
         if not text or not text.strip():

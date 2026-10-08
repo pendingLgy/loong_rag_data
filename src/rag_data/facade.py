@@ -23,7 +23,7 @@ from typing import Any, List, Mapping, Optional, Sequence
 from rag_data.config import Settings
 from rag_data.embedding.embedder import Embedder
 from rag_data.logging.base import LoggerAdapter
-from rag_data.logging.factory import configure_logging
+from rag_data.logging.factory import LoggerFactory
 from rag_data.parsers import chunk_document, parse_document
 from rag_data.parsers.base import load_nlp
 
@@ -41,8 +41,15 @@ def build_settings(source: ConfigSource = None, **overrides: Any) -> Settings:
 
 
 def build_logger(settings: Settings) -> LoggerAdapter:
-    """流程二：装配日志适配层，按配置选择 stdlib、loguru 或 structlog。"""
-    return configure_logging(settings)
+    """流程二：装配日志适配层，后端、级别、格式与时区均取自 logging 分区。"""
+    logging_settings = settings.logging
+    LoggerFactory.setup(
+        backend=logging_settings.backend,
+        timezone_name=logging_settings.timezone or None,
+        level=logging_settings.level,
+        fmt=logging_settings.format or None,
+    )
+    return LoggerFactory.get_logger()
 
 
 def build_nlp(settings: Settings, logger: LoggerAdapter) -> Optional[Any]:
@@ -98,8 +105,12 @@ class RagData:
         return parse_document(path, logger=self.logger)
 
     def chunk(self, path: str, text: str) -> List[str]:
-        """流程：按文件扩展名切块，规则由对应解析器自持。"""
-        return chunk_document(path, text, nlp=self.nlp, logger=self.logger)
+        """流程：按文件扩展名切块，规则由对应解析器自持，长度取自 parsing 分区。"""
+        parsing = self.settings.parsing
+        return chunk_document(
+            path, text, nlp=self.nlp, logger=self.logger,
+            max_chars=parsing.max_chars, safe_max_chars=parsing.safe_max_chars,
+        )
 
     def vectorize(self, texts: Sequence[str]) -> List[List[float]]:
         """流程：批量向量化字符串，返回与输入同序的稠密向量。"""

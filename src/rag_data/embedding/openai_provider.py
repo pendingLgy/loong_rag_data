@@ -1,13 +1,13 @@
 # OpenAI 嵌入实现；Qwen 等 OpenAI 兼容服务复用同一套请求格式。
 #
-# 走标准库 HTTP，不引入额外依赖；网络细节集中在本模块，便于替换与测试。
+# 使用官方 openai SDK，提升维护性并简化请求与异常处理。
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import openai
+from openai import OpenAI
 
 from rag_data.embedding.base import BaseEmbeddingProvider
 from rag_data.exceptions import EmbeddingError
@@ -22,44 +22,54 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
     default_base_url = "https://api.openai.com/v1"
     api_key_env = "OPENAI_API_KEY"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # 初始化 SDK 客户端，传递 base_url 与 api_key
+        self._client: Optional[OpenAI] = None
+
+    @property
+    def client(self) -> OpenAI:
+        """惰性初始化 OpenAI 客户端"""
+        if self._client is None:
+            timeout = self._settings.embedding.timeout
+            self._client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=timeout,
+            )
+        return self._client
+
     def encode(self, texts: List[str]) -> List[List[float]]:
         """请求一次 embeddings，返回与输入同序的向量列表。"""
-        data = self._post_json(self._endpoint(), self._payload(texts))
-        return self._parse(data)
+        kwargs = self._build_request_kwargs(texts)
+        try:
+            response = self.client.embeddings.create(**kwargs)
+            # 使用 response.model_dump() 转换为字典格式，保持与原 _parse 流程相兼容
+            return self._parse(response.model_dump())
+        except openai.APIConnectionError as exc:
+            raise EmbeddingError("嵌入请求无法连接：" + str(exc)) from exc
+        except openai.APIStatusError as exc:
+            raise EmbeddingError(
+                f"嵌入请求失败（HTTP {exc.status_code}）：{exc.message}"
+            ) from exc
+        except openai.OpenAIError as exc:
+            raise EmbeddingError("嵌入请求发生异常：" + str(exc)) from exc
 
     # ---------------- 请求构造（子类可覆盖以适配不同厂商） ----------------
 
-    def _endpoint(self) -> str:
-        return self.base_url.rstrip("/") + "/embeddings"
+    def _build_request_kwargs(self, texts: List[str]) -> Dict[str, Any]:
+        """构建 SDK 传递给 client.embeddings.create 的 kwargs 参数字典。"""
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "input": list(texts),
+        }
 
-    def _payload(self, texts: List[str]) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"model": self.model, "input": list(texts)}
         # 仅在显式配置了维度、且与默认维度不同时才传 dimensions，兼容不支持该参数的模型。
         configured = self._settings.embedding.dim
         if configured and configured != self.default_dim:
-            payload["dimensions"] = configured
-        return payload
+            kwargs["dimensions"] = configured
 
-    def _headers(self) -> Dict[str, str]:
-        return {"Content-Type": "application/json", "Authorization": "Bearer " + self.api_key}
-
-    def _post_json(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """发送 JSON 请求；子类或测试可覆盖本方法以隔离网络。"""
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=self._headers(),
-            method="POST",
-        )
-        try:
-            timeout = self._settings.embedding.timeout
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")
-            raise EmbeddingError("嵌入请求失败（HTTP " + str(exc.code) + "）：" + detail) from exc
-        except urllib.error.URLError as exc:
-            raise EmbeddingError("嵌入请求无法连接：" + str(exc.reason)) from exc
+        return kwargs
 
     def _parse(self, data: Dict[str, Any]) -> List[List[float]]:
         """按 index 排序还原响应顺序，保证与输入一一对应。"""

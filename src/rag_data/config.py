@@ -9,8 +9,11 @@
 #   RAG_EMBEDDING__PROVIDER=qwen
 #   RAG_EMBEDDING__DIM=1024
 #   RAG_PARSING__SPACY_MODEL=zh_core_web_sm
+#   RAG_PARSING__MAX_CHARS=1000
+#   RAG_PARSING__SAFE_MAX_CHARS=2000
 #   RAG_LOGGING__LEVEL=DEBUG
-#   RAG_LOGGING__JSON=true
+#   RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(lineno)d %(funcName)s()] %(message)s
+#   RAG_LOGGING__TIMEZONE=Asia/Shanghai
 
 from __future__ import annotations
 
@@ -40,12 +43,15 @@ ENV_NESTED_DELIMITER = "__"
 
 
 class ParsingSettings(BaseModel):
-    """文档解析与切块参数：spaCy 句柄模型与默认单块字符上限。"""
+    """文档解析与切块参数：spaCy 句柄模型与切块长度上限。"""
 
     model_config = ConfigDict(extra="forbid")
 
     spacy_model: str = Field(default="zh_core_web_sm")
-    max_chars: int = Field(default=1000, gt=0)
+    # 单块字符上限，逐块累加句子至该长度即收块，注入给各解析器。
+    max_chars: int = Field(default=500, gt=0)
+    # 单块安全上限，供解析器在极端长句时兜底，与 max_chars 一同注入。
+    safe_max_chars: int = Field(default=2000, gt=0)
 
 class EmbeddingSettings(BaseModel):
     """向量化参数：provider 决定实现，其余为通用与实现专属配置。"""
@@ -67,13 +73,16 @@ class EmbeddingSettings(BaseModel):
     timeout: float = Field(default=60.0, gt=0)
 
 class LoggingSettings(BaseModel):
-    """日志适配层参数。json 为保留名，故字段名为 json_output 并设置别名。"""
+    """日志适配层参数：后端、级别、格式与时区。"""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    backend: Literal["stdlib", "loguru", "structlog", "auto"] = "auto"
+    backend: Literal["stdliblog", "structlog", "loguru"] = "stdliblog"
     level: str = Field(default="INFO")
-    json_output: bool = Field(default=False, alias="json")
+    # 留空时由工厂读取 pyproject 的 log_cli_format，再回退内置默认。
+    format: str = Field(default="")
+    # 时区：留空用系统本地时区，可填 UTC 或 Asia 开头的 IANA 名。
+    timezone: str = Field(default="")
 
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。

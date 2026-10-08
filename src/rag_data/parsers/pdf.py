@@ -24,14 +24,15 @@ class PdfParser(DocumentParser):
             self,
             max_chars: int = 1000,
             safe_max_chars: int = 2000,
+            logger: Optional[LoggerAdapter] = None,
             header_ratio: float = 0.07,  # 顶部页眉过滤比例（如 7%）
             footer_ratio: float = 0.07,  # 底部页脚过滤比例（如 7%，以 842pt 高度计算约 59pt，可完美覆盖 785~801pt 的页码）
     ):
-        super().__init__(max_chars, safe_max_chars)
+        super().__init__(max_chars, safe_max_chars, logger)
         self.header_ratio = header_ratio
         self.footer_ratio = footer_ratio
 
-    def parse(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse(self, path: str) -> str:
         pdfplumber = _import_deps()
         try:
             all_paragraphs: List[str] = []
@@ -139,16 +140,15 @@ class PdfParser(DocumentParser):
             raise ParseError(f"PDF 解析失败：{path}：{str(exc)}") from exc
 
         full_text = "\n".join(all_paragraphs)
-        if logger is not None:
-            logger.info("PDF 解析完成", source_path=path, chars=len(full_text))
+        if self.logger is not None:
+            self.logger.info("PDF 解析完成", source_path=path, chars=len(full_text))
 
         return full_text
 
     def chunk(
             self,
             text: str,
-            nlp: Any = None,
-            logger: Optional[LoggerAdapter] = None,
+            nlp: Any = None
     ) -> List[str]:
         if not text or not text.strip():
             return []

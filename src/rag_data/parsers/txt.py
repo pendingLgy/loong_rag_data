@@ -18,18 +18,17 @@ class TxtParser(DocumentParser):
 
     SUFFIXES = frozenset({".txt"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
-        super().__init__(max_chars, safe_max_chars)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
+        super().__init__(max_chars, safe_max_chars, logger)
 
-    def parse(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse(self, path: str) -> str:
         """读取纯文本原文。"""
         return self._read_text(path)
 
     def chunk(
         self,
         text: str,
-        nlp: Any = None,
-        logger: Optional[LoggerAdapter] = None,
+        nlp: Any = None
     ) -> List[str]:
         """切块规则：无结构，整篇作为一个段落递归切分。"""
         if not text or not text.strip():

@@ -47,7 +47,10 @@ from rag_data.facade import (
     vectorize,
 )
 from rag_data.logging.base import LoggerAdapter
-from rag_data.logging.factory import configure_logging, get_logger
+from rag_data.logging.factory import LoggerFactory
+from rag_data.logging.loguru_adapter import LoguruAdapter
+from rag_data.logging.stdlib_adapter import StdlibLogAdapter
+from rag_data.logging.structlog_adapter import StructlogAdapter
 from rag_data.parsers import parse_document
 
 __all__ = [
@@ -87,8 +90,10 @@ __all__ = [
     "create_embedding_provider",
     # 日志适配层
     "LoggerAdapter",
-    "configure_logging",
-    "get_logger",
+    "LoggerFactory",
+    "StdlibLogAdapter",
+    "StructlogAdapter",
+    "LoguruAdapter",
     # 异常
     "RagDataError",
     "ConfigError",

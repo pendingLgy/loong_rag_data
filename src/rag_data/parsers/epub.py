@@ -18,10 +18,10 @@ class EpubParser(DocumentParser):
 
     SUFFIXES = frozenset({".epub"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
-        super().__init__(max_chars, safe_max_chars)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
+        super().__init__(max_chars, safe_max_chars, logger)
 
-    def parse(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse(self, path: str) -> str:
         """解析 EPUB：按 reading order 提取各章节段落并序列化返回（优化内存回收）。"""
         epub, bs_class = _import_deps()
         book = None
@@ -42,8 +42,8 @@ class EpubParser(DocumentParser):
             all_paras.extend(paras)
 
         full_text = "\n".join(all_paras)
-        if logger is not None:
-            logger.info(
+        if self.logger is not None:
+            self.logger.info(
                 "EPUB 解析完成",
                 source_path=path,
                 chapters=len(chapter_paragraphs),
@@ -54,8 +54,7 @@ class EpubParser(DocumentParser):
     def chunk(
             self,
             text: str,
-            nlp: Any = None,
-            logger: Optional[LoggerAdapter] = None,
+            nlp: Any = None
     ) -> List[str]:
         """切块规则：基于 raw_chapters 仅通过一次单层循环完成切分与组装，支持超长章节 1/4 重叠二次切分。"""
         if not text or not text.strip():
@@ -77,9 +76,24 @@ class EpubParser(DocumentParser):
 
             if not chap.strip():
                 continue
+
+            if self.logger is not None:
+                self.logger.info(
+                    "EPUB chunk start",
+                    idx=idx,
+                    chap_length=len(chap),
+                    chars=chap[:30],
+                )
             current_overlap_prefix = self._extract_overlap_prefix([overlap_prefix])
 
             min_chunks = self._process_text_recursive(text=chap, overlap_prefix=current_overlap_prefix, nlp=handle)
+
+            if self.logger is not None:
+                self.logger.info(
+                    "EPUB chunk end",
+                    idx=idx
+                )
+
             all_chunks.extend(min_chunks)
 
         return all_chunks

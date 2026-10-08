@@ -67,7 +67,7 @@ def test_parse_reads_text_verbatim(tmp_path):
 def test_parse_accepts_logger(tmp_path, logger):
     path = tmp_path / "a.txt"
     path.write_text("正文", encoding="utf-8")
-    assert TxtParser().parse(str(path), logger=logger) == "正文"
+    assert TxtParser(logger=logger).parse(str(path)) == "正文"
 
 
 # ---------------- chunk ----------------

@@ -31,10 +31,12 @@ dependencies = [
 [project.optional-dependencies]
 parsers = [
   "unstructured>=0.12",
-  "spacy>=3.7",
-  "zh-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.7.0/zh_core_web_sm-3.7.0-py3-none-any.whl",
+  "spacy>=3.8.16",
+  "zh_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.8.0/zh_core_web_sm-3.8.0-py3-none-any.whl",
+  "zh_core_web_md @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_md-3.8.0/zh_core_web_md-3.8.0-py3-none-any.whl",
 ]
 embedding = ["sentence-transformers>=2.5"]
+milvus = ["pymilvus>=2.3"]
 loguru = ["loguru>=0.7"]
 structlog = ["structlog>=24.1"]
 epub = [
@@ -47,6 +49,8 @@ pdf = [
 word = [
   "python-docx>=1.0"
 ]
+openai = ["openai==3.26.0"]
+
 dev = [
   "pytest>=7.4",
   "pytest-cov>=4.1",
@@ -60,6 +64,7 @@ Issues = "https://github.com/pendingLgy/loong_rag_data/issues"
 Source = "https://github.com/pendingLgy/loong_rag_data"
 
 [tool.hatch.envs.default]
+installer = "pip"
 features = [
   "parsers",
   "embedding",
@@ -77,15 +82,18 @@ format = "ruff format src tests"
 
 
 [tool.hatch.envs.rag_data_dev]
+installer = "pip"
 features = [
   "parsers",
   "embedding",
+  "milvus",
   "loguru",
   "structlog",
   "dev",
   "word",
   "pdf",
   "epub",
+  "openai",
 ]
 
 [tool.hatch.envs.rag_data_dev.scripts]
@@ -111,6 +119,10 @@ markers = [
   "slow: 需要外部服务的集成测试，默认跳过",
   "integration: 真实调用外部服务的手工集成测试，默认跳过",
 ]
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)s] [%(pathname)s:%(funcName)s() %(lineno)d] %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.mypy]
 python_version = "3.8"

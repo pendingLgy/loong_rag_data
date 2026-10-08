@@ -73,8 +73,9 @@ def test_build_settings_returns_settings():
 
 
 def test_build_settings_applies_overrides():
-    result = facade.build_settings(parsing={'max_chars': 7}, embedding={'dim': 8})
+    result = facade.build_settings(parsing={'max_chars': 7, 'safe_max_chars': 9}, embedding={'dim': 8})
     assert result.parsing.max_chars == 7
+    assert result.parsing.safe_max_chars == 9
     assert result.embedding.dim == 8
 
 
@@ -333,3 +334,19 @@ def test_facade_all_symbols():
         'build_embedder',
         'vectorize',
     }
+
+
+def test_chunk_forwards_parsing_limits(monkeypatch, det_settings, logger):
+    # chunk 应把 parsing 分区的长度配置透传给分派函数。
+    captured = {}
+
+    def fake_chunk(path, text, nlp=None, logger=None, max_chars=None, safe_max_chars=None):
+        captured['max_chars'] = max_chars
+        captured['safe_max_chars'] = safe_max_chars
+        return ['ok']
+
+    monkeypatch.setattr(facade, 'chunk_document', fake_chunk)
+    app = _make_app(det_settings, logger)
+    assert app.chunk('a.txt', 'text') == ['ok']
+    assert captured['max_chars'] == det_settings.parsing.max_chars
+    assert captured['safe_max_chars'] == det_settings.parsing.safe_max_chars

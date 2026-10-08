@@ -20,10 +20,10 @@ class _Doc:
 class _Dummy(DocumentParser):
     "最小具体子类：用于直接调用基类提供的分句与切块方法。"
 
-    def parse(self, path, logger=None):
+    def parse(self, path):
         return ""
 
-    def chunk(self, text, nlp=None, logger=None):
+    def chunk(self, text, nlp=None):
         return []
 
 

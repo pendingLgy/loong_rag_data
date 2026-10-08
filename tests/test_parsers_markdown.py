@@ -60,7 +60,7 @@ def test_parse_reads_markdown_verbatim(tmp_path):
 def test_parse_accepts_logger(tmp_path, logger):
     path = tmp_path / "a.md"
     path.write_text("正文", encoding="utf-8")
-    assert MarkdownParser().parse(str(path), logger=logger) == "正文"
+    assert MarkdownParser(logger=logger).parse(str(path)) == "正文"
 
 
 # ---------------- chunk ----------------

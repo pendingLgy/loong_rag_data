@@ -13,7 +13,7 @@ from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Union
 
 from rag_data.logging.base import LoggerAdapter
 
-DEFAULT_MODEL = "zh_core_web_sm"
+DEFAULT_MODEL = "zh_core_web_md"
 
 # 失败哨兵：与「尚未加载」区分，避免每次调用都重复尝试加载。
 _FAILED = object()
@@ -26,12 +26,13 @@ class DocumentParser(ABC):
     # 该解析器负责的扩展名（小写、含点）；子类必须覆盖，且不得与其它解析器重复。
     SUFFIXES: ClassVar[FrozenSet[str]] = frozenset()
 
-    def __init__(self, max_chars: int = 500, safe_max_chars = 2000):
+    def __init__(self, max_chars: int = 500, safe_max_chars = 2000, logger: Optional[LoggerAdapter] = None):
         self.max_chars = max_chars
         self.safe_max_chars = safe_max_chars
+        self.logger = logger
 
     @abstractmethod
-    def parse(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse(self, path: str) -> str:
         """解析单个文件并返回纯文本。"""
 
     @abstractmethod
@@ -39,7 +40,6 @@ class DocumentParser(ABC):
         self,
         text: str,
         nlp: Any = None,
-        logger: Optional[LoggerAdapter] = None,
     ) -> List[str]:
         """把纯文本切分为块；nlp 为注入的句柄，None 时各子类按自身规则处理。"""
 
@@ -69,7 +69,7 @@ class DocumentParser(ABC):
                 logger.warning("spaCy 未安装，分句与实体抽取将使用回退实现", model=model_name)
             return None
         try:
-            nlp = spacy.load(model_name)
+            nlp = spacy.load(model_name,disable=["tagger", "ner", "attribute_ruler"])
         except Exception as exc:  # noqa: BLE001 模型缺失或加载失败均降级
             _PIPELINES[model_name] = _FAILED
             if logger is not None:
