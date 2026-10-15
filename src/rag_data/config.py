@@ -30,11 +30,13 @@ from rag_data.exceptions import ConfigError, OptionalDependencyError
 SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
 SECTION_LOGGING = "logging"
+SECTION_LLM = "llm"
 
 MODULE_SECTIONS: List[str] = [
     SECTION_PARSING,
     SECTION_EMBEDDING,
     SECTION_LOGGING,
+    SECTION_LLM,
 ]
 
 # 环境变量前缀与分区分隔符，与 SettingsConfigDict 的 env_prefix、env_nested_delimiter 一致。
@@ -84,12 +86,32 @@ class LoggingSettings(BaseModel):
     # 时区：留空用系统本地时区，可填 UTC 或 Asia 开头的 IANA 名。
     timezone: str = Field(default="")
 
+class LLMSettings(BaseModel):
+    """大模型参数：provider 决定实现，其余为通用与实现专属配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # provider 名对应大模型注册表中的键；内置 openai、qwen、deepseek，qwen 与 deepseek 兼容 OpenAI。
+    provider: str = Field(default="openai")
+    # 模型名。留空时用 provider 的默认模型，见各 provider 的 default_model。
+    model: str = Field(default="")
+    # 采样温度，范围 0 到 2。
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    # 单次生成的最大 token 数，0 表示不显式传入（由服务端决定）。
+    max_tokens: int = Field(default=0, ge=0)
+    # API Key。留空时读取 provider 约定的环境变量，如 OPENAI_API_KEY、DASHSCOPE_API_KEY、DEEPSEEK_API_KEY。
+    api_key: str = Field(default="")
+    # 接口地址。留空时用 provider 默认地址，可指向自建网关或代理。
+    base_url: str = Field(default="")
+    timeout: float = Field(default=60.0, gt=0)
+
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
     SECTION_PARSING: ParsingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
     SECTION_LOGGING: LoggingSettings,
+    SECTION_LLM: LLMSettings,
 }
 
 class Settings(BaseSettings):
@@ -108,6 +130,7 @@ class Settings(BaseSettings):
     parsing: ParsingSettings = Field(default_factory=ParsingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
 
     @classmethod
     def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "Settings":

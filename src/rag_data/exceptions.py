@@ -29,3 +29,7 @@ class ParseError(RagDataError):
 
 class EmbeddingError(RagDataError):
     """向量化失败。"""
+
+
+class LLMError(RagDataError):
+    """大模型调用失败。"""
