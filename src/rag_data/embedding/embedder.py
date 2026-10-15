@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from rag_data.config import Settings
+from rag_data.config import EmbeddingSettings
 from rag_data.embedding.registry import create_embedding_provider
 from rag_data.exceptions import EmbeddingError
 from rag_data.logging.base import LoggerAdapter
@@ -13,7 +13,7 @@ from rag_data.logging.base import LoggerAdapter
 class Embedder:
     """文本向量化封装：按配置装配 provider，注入的 model 优先且绕过配置。"""
 
-    def __init__(self, settings: Settings, logger: LoggerAdapter, model: Optional[Any] = None) -> None:
+    def __init__(self, settings: EmbeddingSettings, logger: LoggerAdapter, model: Optional[Any] = None) -> None:
         self._settings = settings
         self._logger = logger
         # 注入的 model 只需实现 encode(texts)，可选提供 max_batch_size，便于测试与自定义。
@@ -43,8 +43,8 @@ class Embedder:
         if self._model is not None:
             return self._model
         if self._provider is None:
-            name = self._settings.embedding.provider
-            self._provider = create_embedding_provider(name, self._settings, self._logger)
+            name = self._settings.provider
+            self._provider = create_embedding_provider(name)
             self._logger.info(
                 "Embedding provider 已装配",
                 provider=name,
@@ -55,7 +55,7 @@ class Embedder:
 
     def _batch_size(self, target: Any) -> int:
         """批次大小：取配置值与 provider 单次上限的较小者，上限为 0 表示不限制。"""
-        size = self._settings.embedding.batch_size
+        size = self._settings.batch_size
         limit = int(getattr(target, "max_batch_size", 0) or 0)
         return min(size, limit) if limit > 0 else size
 
@@ -66,7 +66,7 @@ class Embedder:
 
     def _validate_dim(self, vectors: List[List[float]]) -> None:
         """校验向量维度与 embedding.dim 一致，避免下游按错误维度使用。"""
-        expected = self._settings.embedding.dim
+        expected = self._settings.dim
         for vector in vectors:
             if len(vector) != expected:
                 raise EmbeddingError(

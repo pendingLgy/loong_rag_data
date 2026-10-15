@@ -1,33 +1,22 @@
-# rag-data 公共入口文件（Public API）。
+# rag-data 包根：仅导出当前目录（直接模块）的公共符号，不含子包与子目录内容。
 #
-# 外部调用只需引入本包，无需关心内部子包路径：
+# 子包 parsers、embedding、logging 的内容请按具体模块路径取用：
 #
-#   import rag_data
-#   from rag_data import Settings, RagData
-#
-# 本文件仅做统一导出，不承载任何业务逻辑；内部实现仍按模块分布在各自子包中。
+#   from rag_data.parsers import ParserAdapter
+#   from rag_data.embedding import Embedder
+#   from rag_data.logging import LoggerFactory
 
 from rag_data.__about__ import __version__
 from rag_data.config import (
     ENV_NESTED_DELIMITER,
     ENV_PREFIX,
+    SECTION_EMBEDDING,
+    SECTION_LOGGING,
+    SECTION_PARSING,
     EmbeddingSettings,
     LoggingSettings,
     ParsingSettings,
     Settings,
-    load_env_overrides,
-)
-from rag_data.embedding.base import BaseEmbeddingProvider
-from rag_data.embedding.embedder import Embedder
-from rag_data.embedding.openai_provider import OpenAIEmbeddingProvider
-from rag_data.embedding.qwen_provider import QwenEmbeddingProvider
-from rag_data.embedding.registry import (
-    available_embedding_providers,
-    create_embedding_provider,
-    is_embedding_registered,
-    register_embedding,
-    register_embedding_provider,
-    resolve_embedding_provider,
 )
 from rag_data.exceptions import (
     ConfigError,
@@ -38,63 +27,22 @@ from rag_data.exceptions import (
     ParserDependencyError,
     RagDataError,
 )
-from rag_data.facade import (
-    RagData,
-    build_embedder,
-    build_logger,
-    build_nlp,
-    build_settings,
-    vectorize,
-)
-from rag_data.logging.base import LoggerAdapter
-from rag_data.logging.factory import LoggerFactory
-from rag_data.logging.loguru_adapter import LoguruAdapter
-from rag_data.logging.stdlib_adapter import StdlibLogAdapter
-from rag_data.logging.structlog_adapter import StructlogAdapter
-from rag_data.parsers import parse_document
+from rag_data.facade import RagData
+from rag_data.registry import Ref, Registry
 
 __all__ = [
-    "config",
-    "parsers",
-    "embedding",
-    "logging",
-    # 流程门面
-    "RagData",
-    "vectorize",
-    "build_settings",
-    "build_logger",
-    "build_nlp",
-    "build_embedder",
-    # 版本
     "__version__",
     # 配置
     "Settings",
     "ParsingSettings",
     "EmbeddingSettings",
     "LoggingSettings",
-    "load_env_overrides",
     "ENV_PREFIX",
     "ENV_NESTED_DELIMITER",
-    # 解析
-    "parse_document",
-    # 向量化
-    "Embedder",
-    "BaseEmbeddingProvider",
-    "OpenAIEmbeddingProvider",
-    "QwenEmbeddingProvider",
-    "register_embedding",
-    "register_embedding_provider",
-    "available_embedding_providers",
-    "is_embedding_registered",
-    "resolve_embedding_provider",
-    "create_embedding_provider",
-    # 日志适配层
-    "LoggerAdapter",
-    "LoggerFactory",
-    "StdlibLogAdapter",
-    "StructlogAdapter",
-    "LoguruAdapter",
-    # 异常
+    "SECTION_PARSING",
+    "SECTION_EMBEDDING",
+    "SECTION_LOGGING",
+    # 契约异常
     "RagDataError",
     "ConfigError",
     "DataError",
@@ -102,5 +50,9 @@ __all__ = [
     "ParserDependencyError",
     "ParseError",
     "EmbeddingError",
+    # 通用设施
+    "Registry",
+    "Ref",
+    # 流程门面
+    "RagData",
 ]
-

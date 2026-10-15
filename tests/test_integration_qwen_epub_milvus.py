@@ -45,7 +45,6 @@ from openai import OpenAI
 import pytest
 
 from rag_data import RagData, Settings
-from rag_data.facade import build_logger, build_nlp
 
 # 凭据与连接信息一律来自运行时环境变量，代码中不写默认密钥。
 MILVUS_URI = os.environ.get('RAG_IT_MILVUS_URI', 'http://127.0.0.1:19530')
@@ -105,7 +104,7 @@ pytestmark = [pytest.mark.integration, requires_api_key, requires_pymilvus, requ
 @pytest.fixture(scope='module')
 def it_settings() -> Settings:
     # 按集成测试需要构造配置：qwen 嵌入；凭据与模型来自环境变量。
-    return Settings.load(
+    return Settings.load_mapping(
         parsing={
             'spacy_model': SPACY_MODEL,
             'max_chars': MAX_CHARS,
@@ -126,12 +125,7 @@ def it_settings() -> Settings:
 
 @pytest.fixture(scope='module')
 def app(it_settings) -> RagData:
-    # 装配真实门面：真实 Qwen 嵌入与真实 spaCy 句柄；句柄不可用时跳过。
-    logger = build_logger(it_settings)
-    nlp = build_nlp(it_settings, logger)
-    if nlp is None:
-        pytest.skip('spaCy 句柄不可用，无法切块')
-    return RagData(it_settings, logger=logger, nlp=nlp)
+    return RagData(it_settings)
 
 @pytest.fixture(scope='module')
 def pymilvus():

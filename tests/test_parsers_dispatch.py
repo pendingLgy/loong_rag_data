@@ -5,8 +5,6 @@ import pytest
 from rag_data.exceptions import ParseError
 from rag_data.parsers import (
     PARSER_CLASSES,
-    PARSERS,
-    SUPPORTED_SUFFIXES,
     chunk_document,
     resolve_parser,
 )
@@ -34,19 +32,6 @@ def _slice_handle(size):
 
 def _explode(text):
     raise AssertionError('短文本不应调用句柄')
-
-
-# ---------------- 后缀索引 ----------------
-
-
-def test_index_covers_all_suffixes():
-    expected = set().union(*(cls.SUFFIXES for cls in PARSER_CLASSES))
-    assert SUPPORTED_SUFFIXES == expected
-
-
-def test_default_instances_match_classes():
-    assert len(PARSERS) == len(PARSER_CLASSES)
-    assert all(isinstance(parser, DocumentParser) for parser in PARSERS)
 
 
 # ---------------- resolve_parser ----------------

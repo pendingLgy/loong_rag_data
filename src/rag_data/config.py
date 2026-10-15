@@ -1,7 +1,7 @@
 # 配置模型：按模块分区，默认读取环境变量，也支持在代码中硬编码。
 #
 # 优先级由高到低：
-#   1. 代码硬编码：Settings.load(embedding={"provider": "qwen"})
+#   1. 代码硬编码：Settings.load_mapping(embedding={"provider": "qwen"})
 #   2. 环境变量：RAG_<分区>__<字段>，如 RAG_EMBEDDING__DIM=1024
 #   3. 字段默认值
 #
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Literal, Optional, Type
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from rag_data.exceptions import ConfigError
+from rag_data.exceptions import ConfigError, OptionalDependencyError
 
 SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
@@ -110,35 +110,62 @@ class Settings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     @classmethod
-    def load(
-        cls,
-        source: Optional[Mapping[str, Any]] = None,
-        *,
-        use_env: bool = True,
-        **overrides: Any,
-    ) -> "Settings":
-        """加载配置，优先级由高到低：代码硬编码 > 环境变量 > 字段默认值。"""
-        # source 为整体配置字典，overrides 以分区为单位，二者都是代码硬编码，优先级最高。
-        # 环境变量先作为基线，再由硬编码逐字段覆盖，因此同时存在时以硬编码为准。
-        # use_env 为 False 时忽略环境变量，便于测试与结果复现。
-        if source is not None and not isinstance(source, Mapping):
-            # 配置文件读取已移除，传路径时给出明确提示。
-            raise ConfigError("配置源需为分区的字典；已移除配置文件读取，请改用环境变量或代码硬编码")
-        env_data = _filter_sections(load_env_overrides()) if use_env else {}
-        hardcoded = dict(source) if source else {}
-        # 硬编码中的分区名必须合法，避免拼写错误被静默忽略。
+    def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "Settings":
+        '''来源一：解析 JSON 对象（分区的字典），不读取环境变量。'''
+        hardcoded = cls._read_mapping(source)
         _validate_sections(hardcoded, overrides)
-        layered = _merge_sections(env_data, hardcoded)
-        layered = _merge_sections(layered, overrides)
-        if use_env:
-            # 环境变量作为基线，未指定的字段由 pydantic-settings 从环境与 .env 补齐。
-            return cls(**layered)
-        # 关闭环境变量：先用各分区默认值补齐每个字段，再整体作为构造实参传入。
-        # 显式实参在 pydantic-settings 中优先级最高，环境变量因此无从渗入；
-        # 不依赖 model_validate 是否绕过环境源这一版本相关行为。
+        layered = _merge_sections(hardcoded, overrides)
         return cls(**_with_defaults(layered))
 
-def load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+    @classmethod
+    def load_env(cls, environ: Optional[Mapping[str, str]] = None, **overrides: Any) -> "Settings":
+        '''来源二：解析环境变量，RAG_ 前缀、双下划线分隔，键如 RAG_EMBEDDING__DIM。'''
+        env_data = cls._read_env(environ)
+        _validate_sections(overrides)
+        layered = _merge_sections(env_data, overrides)
+        return cls(**_with_defaults(layered))
+
+    @classmethod
+    def load_yaml(cls, path: str, **overrides: Any) -> "Settings":
+        '''来源三：解析 config.yml 文件，内容需为分区的映射。'''
+        file_data = cls._read_yaml(path)
+        _validate_sections(file_data, overrides)
+        layered = _merge_sections(file_data, overrides)
+        return cls(**_with_defaults(layered))
+
+    # ---------------- 三类来源的解析 ----------------
+
+    @staticmethod
+    def _read_mapping(source: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+        '''解析 JSON 对象：确认为分区的映射后原样返回。'''
+        if source is None:
+            return {}
+        if not isinstance(source, Mapping):
+            raise ConfigError('''配置源需为分区的字典（JSON 对象）；如需读取文件请用 Settings.load_yaml''')
+        return dict(source)
+
+    @staticmethod
+    def _read_env(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+        '''解析环境变量：抽取 RAG_ 前缀并组装为分区字典。'''
+        return _filter_sections(_load_env_overrides(environ))
+
+    @staticmethod
+    def _read_yaml(path: str) -> Dict[str, Any]:
+        '''解析 config.yml：惰性导入 PyYAML，内容需为分区的映射。'''
+        yaml = _import_yaml()
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle)
+        except OSError as exc:
+            raise ConfigError('''无法读取配置文件：''' + str(path)) from exc
+        if data is None:
+            return {}
+        if not isinstance(data, Mapping):
+            raise ConfigError('''配置文件需为分区的映射：''' + str(path))
+        return dict(data)
+
+
+def _load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     """把 RAG_ 前缀的环境变量组装为分区字典，键形如 RAG_EMBEDDING__DIM。"""
     source = os.environ if environ is None else environ
     data: Dict[str, Any] = {}
@@ -209,3 +236,12 @@ def _parse_env_value(raw: Any) -> Any:
         except json.JSONDecodeError:
             return raw
     return raw
+
+
+def _import_yaml() -> Any:
+    '''惰性导入 PyYAML；未安装时抛出可选依赖异常。'''
+    try:
+        import yaml
+    except ImportError as exc:
+        raise OptionalDependencyError('''解析 YAML 需要 PyYAML，请安装 pyyaml''') from exc
+    return yaml

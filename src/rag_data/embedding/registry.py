@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Type
 from rag_data.registry import Ref, Registry
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import Settings
+    from rag_data.config import Settings, EmbeddingSettings
     from rag_data.embedding.base import BaseEmbeddingProvider
     from rag_data.logging.base import LoggerAdapter
 
@@ -49,9 +49,7 @@ def resolve_embedding_provider(name: str) -> Type[BaseEmbeddingProvider]:
 
 def create_embedding_provider(
     name: str,
-    settings: Settings,
-    logger: LoggerAdapter,
     **kwargs: Any,
 ) -> BaseEmbeddingProvider:
     """按 provider 名创建实例，统一以关键字传入 settings 与 logger。"""
-    return _REGISTRY.create(name, settings=settings, logger=logger, **kwargs)
+    return _REGISTRY.create(name, **kwargs)

@@ -447,6 +447,8 @@ hatch run format    # ruff format src tests
 # 开发环境（叠加全部可选依赖）
 hatch run rag_data_dev:test
 hatch run rag_data_dev:check
+
+hatch run rag_data_dev:pytest -- tests/test_integration_postgres.py -rs
 ```
 
 若使用 uv 直接管理依赖：
