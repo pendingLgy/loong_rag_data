@@ -1,285 +1,158 @@
 # rag-data
 
-历史文本数据导入与向量化管道。范围聚焦离线批量导入链路：文档解析、分块、向量化；向量落库流程待后续重新设计，不含在线召回模块。
+历史文本导入与向量化管道。范围聚焦离线批量导入链路：文档解析、切块、向量化；向量落库流程待后续重新设计，不含在线召回模块。
+
+开发、构建与测试说明见 [development.md](development.md)。
 
 ## 特性
 
+- 五类文档解析：TXT、Markdown、EPUB、PDF、Word，一种格式一个 DocumentParser 子类
 - 按格式切块：切块规则由各解析器自持（递归切分 + 四分之一重叠前缀）；spaCy 句柄由门面加载并缓存，逐级注入切块
-- 文档解析：TXT、Markdown、EPUB、PDF、Word；EPUB 以 ebooklib 与 BeautifulSoup 提取并排除目录页，PDF 以 pdfplumber 按物理坐标提取并过滤页眉页脚，Word 以 python-docx 提取段落
-- pydantic v2 数据模型与 pydantic-settings 配置，边界即校验
-- 日志适配层：标准库 logging、loguru、structlog 三后端可切换
+- pydantic v2 分区配置 + pydantic-settings，实例化即校验，环境变量以 RAG_ 前缀命名
+- 日志适配层：stdliblog、loguru、structlog 三后端可切换
 - 向量化：Embedder 封装 provider（openai、qwen），字符串直接编码为稠密向量
-- 嵌入模型抽象：OpenAI 与通义千问内置实现，配置切换，基于官方 openai SDK
-
-## 环境与依赖管理
-
-本项目使用 hatch 管理构建与运行环境，使用 uv 解析与安装依赖。
-
-### 环境要求
-
-- Python 3.8 及以上
-- uv（依赖管理）与 hatch（构建环境管理）
-- 核心依赖：pydantic、pydantic-settings
-
-### 安装 uv 与 hatch
-
-```bash
-# uv：依赖解析、虚拟环境与锁定
-pip install uv
-# macOS/Linux 亦可使用官方脚本
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# hatch：构建与多环境管理
-pip install hatch
-```
-
-### 使用 uv 管理依赖
-
-```bash
-# 创建虚拟环境，默认位于 .venv
-uv venv
-
-# 安装核心依赖，并以可编辑模式挂载当前项目
-uv pip install -e .
-
-# 按需安装可选依赖
-uv pip install -e ".[epub,loguru]"
-
-# 安装开发依赖
-uv pip install -e ".[dev]"
-
-# 或一次性安装全部可选与开发依赖
-uv pip install -e ".[parsers,embedding,epub,pdf,word,openai,milvus,loguru,structlog,dev]"
-```
-
-激活虚拟环境：
-
-```bash
-# macOS/Linux
-source .venv/bin/activate
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-```
-
-依赖发生变更后重新安装，或解析为锁定文件以获得可复现环境：
-
-```bash
-# 增量安装新增依赖
-uv pip install -e ".[dev]"
-
-# 将 pyproject.toml 解析为锁定文件
-uv pip compile pyproject.toml --all-extras -o requirements.lock
-
-# 按锁定文件精确同步环境（会移除多余包）
-uv pip sync requirements.lock
-```
-
-说明：uv 直接读取 pyproject.toml 的 dependencies 与 optional-dependencies，无需额外配置文件。
-
-### 使用 hatch 管理环境与构建
-
-hatch 环境直接读取 pyproject.toml 的依赖声明，已定义两套：
-
-| 环境 | 名称 | 包含依赖 |
-| :--- | :--- | :--- |
-| 默认环境 | default | parsers、embedding、epub、loguru、structlog、dev |
-| 开发环境 | rag_data_dev | parsers、embedding、milvus、epub、pdf、word、openai、loguru、structlog、dev |
-
-```bash
-# 创建环境
-hatch env create
-hatch env create rag_data_dev
-
-# 查看已有环境
-hatch env show
-
-# 清理环境
-hatch env prune #清理所有环境
-hatch env prune -e parsers # 使用 -e 或 --env 参数指定某个具体的环境名称（如 dev、parsers、test）：****
-
-# 查看已安装依赖
-hatch run rag_data_dev:pip list
-
-# 在默认环境中执行命令
-hatch run pytest
-
-# 通过脚本执行，脚本定义见 pyproject.toml 的 [tool.hatch.envs.*.scripts]
-hatch run test
-hatch run types
-hatch run check
-hatch run format
-
-# 在开发环境中执行命令（前缀为环境名）
-hatch run rag_data_dev:test
-hatch run rag_data_dev:types
-hatch run rag_data_dev:check
-hatch run rag_data_dev:pytest -rs #查看具体信息
-hatch run rag_data_dev:pytest -- tests/test_integration_qwen_epub_milvus.py -rs
-hatch run rag_data_dev:pytest tests/test_integration_qwen_epub_milvus.py::test_chunk_returns_non_empty_blocks -rs
-
-# 进入交互式 shell
-hatch shell
-hatch shell rag_data_dev
-
-# 构建 sdist 与 wheel，产物在 dist/
-hatch build
-
-# 发布到 PyPI
-hatch publish
-```
-
-### 常用组合
-
-| 目标 | 命令 |
-| :--- | :--- |
-| 克隆后快速开始 | uv venv，再 uv pip install -e ".[dev]" |
-| 运行测试 | uv run pytest 或 hatch run pytest |
-| 类型检查 | hatch run types 或 hatch run rag_data_dev:types |
-| 代码风格 | hatch run check 或 hatch run rag_data_dev:check |
-| 构建发行包 | hatch build |
+- 包根只导出当前目录（直接模块）的公共符号；子包按模块路径取用
 
 ## 快速开始
 
 ```python
-from rag_data import RagData
+from rag_data.config import Settings
+from rag_data.facade import RagData
 
-app = RagData.create()                 # 一次装配全部流程
-text = app.parse("README.md")          # 流程：解析为纯文本
-chunks = app.chunk("README.md", text)  # 流程：按格式切块
-vectors = app.vectorize(["一段文本"])    # 流程：字符串向量化
+app = RagData(Settings.load_mapping())      # 一次装配：配置、日志、句柄、向量化
+text = app.parse_document("a.md")         # 文件 → 纯文本
+chunks = app.chunk_document("a.md", text)  # 文本 → 切块
+vectors = app.embedder.encode(["一段文本"]) # 字符串 → 稠密向量
 ```
 
-## 公共 API
+## 包根导出
 
-本包对外只暴露一个入口文件，即包根 __init__.py；外部调用无需关心内部子包路径：
+rag_data 的包根 __init__.py 只导出当前目录直接模块的公共符号（共 20 个），不含子包与子目录内容：
 
-```python
-import rag_data
-from rag_data import Settings, RagData
-```
-
-导出内容按用途分组：
-
-| 分组 | 导出符号 |
+| 分组 | 符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | Settings、ParsingSettings、EmbeddingSettings、LoggingSettings、load_env_overrides、ENV_PREFIX、ENV_NESTED_DELIMITER |
-| 解析 | parse_document |
-| 向量化 | Embedder、BaseEmbeddingProvider、OpenAIEmbeddingProvider、QwenEmbeddingProvider、register_embedding、register_embedding_provider、available_embedding_providers、is_embedding_registered、resolve_embedding_provider、create_embedding_provider |
-| 流程门面 | RagData、vectorize、build_settings、build_logger、build_nlp、build_embedder |
-| 日志适配 | LoggerAdapter、LoggerFactory、StdlibLogAdapter、StructlogAdapter、LoguruAdapter |
+| 配置 | Settings、ParsingSettings、EmbeddingSettings、LoggingSettings、ENV_PREFIX、ENV_NESTED_DELIMITER、SECTION_PARSING、SECTION_EMBEDDING、SECTION_LOGGING |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError |
+| 通用设施 | Registry、Ref |
+| 流程门面 | RagData |
 
-解析产出纯文本，切块产出分块列表，向量化直接返回稠密向量；落库流程待存储层重新设计后补全。
-
-
-## 流程门面
-
-facade.py 把各流程的调用方法集中封装，调用方不必再逐个导入子模块：
+子包（parsers、embedding、logging）不参与包根导出，按模块路径取用：
 
 ```python
-from rag_data import RagData
-
-app = RagData.create()                # 装配配置、日志、句柄与向量化
-text = app.parse("a.md")               # 流程：解析文件为文本
-chunks = app.chunk("a.md", text)       # 流程：按格式切块
-app.vectorize(["一段文本"])             # 流程：向量化字符串
+from rag_data.parsers import ParserAdapter, parse_document
+from rag_data.embedding import Embedder
+from rag_data.logging import LoggerFactory
 ```
 
-也可以按需只装配单个流程：
+## 配置
 
-| 方法 | 流程 |
-| :--- | :--- |
-| build_settings(source, **overrides) | 加载配置（分区字典硬编码）|
-| build_logger(settings) | 装配日志适配层 |
-| build_nlp(settings, logger) | 加载 spaCy 句柄，不可用则降级为 None |
-| build_embedder(settings, logger, model) | 装配向量化组件 |
-| vectorize(texts, source) | 一键向量化字符串 |
+config.py 按分区（parsing、embedding、logging）定义模型，提供三类来源的加载方法。
+
+### 三类来源
+
+| 方法 | 来源 | 说明 |
+| :--- | :--- | :--- |
+| Settings.load_mapping(source=None, **overrides) | JSON 对象（分区字典） | 代码硬编码，不读取环境变量 |
+| Settings.load_env(environ=None, **overrides) | 环境变量 | 抽取 RAG_ 前缀，键如 RAG_EMBEDDING__DIM |
+| Settings.load_yaml(path, **overrides) | config.yml 文件 | 惰性导入 PyYAML，内容须为分区映射 |
 
 ```python
-from rag_data import build_settings, build_logger, build_embedder
+from rag_data.config import Settings
 
-settings = build_settings(embedding={"provider": "qwen"})
-logger = build_logger(settings)
-embedder = build_embedder(settings, logger)
+settings = Settings()                            # 读 RAG_ 环境变量与 .env
+settings = Settings.load_env()                   # 显式按环境变量加载
+settings = Settings.load_mapping({"embedding": {"provider": "qwen"}})
+settings = Settings.load_mapping(embedding={"dim": 1024}, parsing={"max_chars": 180})
+settings = Settings.load_yaml("config.yml")
 ```
 
-RagData 一次装配后可反复调用，配置、日志、句柄与向量化组件都挂在实例上：
+三类方法均以分区默认值补齐字段，overrides 以分区为单位逐字段覆盖。
 
-```python
-from rag_data import RagData
+### 环境变量
 
-app = RagData.create()
-text = app.parse("doc.md")           # 文件 → 纯文本
-vectors = app.vectorize(["一段文本"])   # 字符串 → 稠密向量
-```
-
-字符串向量化返回与输入同序的向量列表；
-app.vectorize_text(text) 返回单个向量。两者都经过 Embedder，维度按 embedding.dim 校验。
-
-
-## 嵌入模型注册与切换
-
-嵌入模型同样采用注册表：继承 BaseEmbeddingProvider 并声明 backend 名称即自动注册，
-通过配置 embedding.provider 切换，无需改动装配代码。
-
-### 内置 provider
-
-| provider | 实现 | 默认模型 | 默认维度 | API Key 环境变量 |
-| :--- | :--- | :--- | :--- | :--- |
-| openai | OpenAIEmbeddingProvider | text-embedding-3-small | 1536 | OPENAI_API_KEY |
-| qwen | QwenEmbeddingProvider | qwen3.7-text-embedding | 1024 | DASHSCOPE_API_KEY |
-
-两个内置 provider 都基于官方 openai SDK；qwen 复用同一请求格式（DashScope 兼容模式），
-差异仅在默认模型、接口地址、API Key 环境变量与单次批量上限（10 条）。
-
-```python
-from rag_data import available_embedding_providers
-
-available_embedding_providers()   # ["openai", "qwen"]
-```
-
-### 切换 provider：只改配置
-
-```json
-{ "embedding": { "provider": "qwen", "model": "qwen3.7-text-embedding" } }
-```
-
-```python
-from rag_data import RagData
-
-app = RagData.create(overrides={
-    "embedding": { "provider": "qwen" },
-})
-```
-
-环境变量亦可：
+分区与字段之间用双下划线分隔，名称大写：
 
 ```bash
 RAG_EMBEDDING__PROVIDER=qwen
-RAG_EMBEDDING__MODEL=qwen3.7-text-embedding
-DASHSCOPE_API_KEY=sk-xxx
+RAG_EMBEDDING__DIM=1024
+RAG_LOGGING__LEVEL=DEBUG
+RAG_LOGGING__TIMEZONE=Asia/Shanghai
 ```
 
-### embedding 配置项
+取值按字段类型自动转换；对象与数组按 JSON 书写。分区名写错会抛 ConfigError，并列出可用分区。
 
-| 字段 | 默认值 | 说明 |
+### 分区与字段（括号内为默认值）
+
+| 分区 | 字段 |
+| :--- | :--- |
+| parsing | spacy_model(zh_core_web_sm)、max_chars(500)、safe_max_chars(2000) |
+| embedding | provider(openai)、model(空)、batch_size(128)、dim(1024)、api_key(空)、base_url(空)、timeout(60.0) |
+| logging | backend(stdliblog)、level(INFO)、format(空，读 pyproject)、timezone(空，系统本地) |
+
+维度一致性：embedding.dim 声明期望输出维度（默认 1024），Embedder 据此校验每条向量，不一致抛 EmbeddingError。
+
+### 加载依赖说明
+
+load_yaml 依赖 PyYAML，未安装时抛 OptionalDependencyError（惰性导入，不影响其余功能）。
+
+## 文档解析与切块（parsers）
+
+parsers 子包按扩展名把解析与切块派发到对应 DocumentParser 子类；派发逻辑集中在 parser_adapter.py 的 ParserAdapter。
+
+```text
+文件 → parse_document → 文本 → chunk_document → 切块
+```
+
+| 文件 | 关键符号 | 说明 |
 | :--- | :--- | :--- |
-| provider | openai | 注册表中的 provider 名 |
-| model | 空 | 模型名，留空用 provider 默认模型 |
-| dim | 1024 | 期望输出维度，向量化结果按此校验 |
-| batch_size | 128 | 每批文本条数，与 provider 上限取较小者 |
-| api_key | 空 | 留空时读取 provider 约定的环境变量 |
-| base_url | 空 | 留空时用 provider 默认地址，可指向自建网关 |
-| timeout | 60.0 | 单次请求超时秒数 |
+| parser_adapter.py | ParserAdapter、PARSER_CLASSES | 按扩展名派发；构造时可替换解析器类集合 |
+| base.py | DocumentParser、load_nlp | 抽象基类（SUFFIXES 与 parse、chunk 契约）与 spaCy 句柄加载 |
+| txt.py | TxtParser | .txt，整篇递归切块 |
+| markdown.py | MarkdownParser | .md、.markdown，按井号分章后递归切块 |
+| epub.py | EpubParser | .epub，按 spine 提取章节（排除目录页）后递归切块 |
+| pdf.py | PdfParser | .pdf，pdfplumber 按物理坐标提取、过滤页眉页脚 |
+| word.py | WordParser | .docx，python-docx 提取段落 |
 
-输出维度需与 embedding.dim 一致，不一致会抛 EmbeddingError。
+ParserAdapter 提供三个方法：
+
+| 方法 | 作用 |
+| :--- | :--- |
+| resolve_parser(path, max_chars=None, safe_max_chars=None, logger=None) | 按扩展名构造该格式的解析器实例 |
+| parse_document(path, logger=None) | 解析单个文档并返回纯文本 |
+| chunk_document(path, text, nlp=None, logger=None, max_chars=None, safe_max_chars=None) | 按扩展名派发到该格式的 chunk |
+
+单块上限 max_chars 与安全上限 safe_max_chars 由 parsing 分区注入（默认 500 与 2000）；句柄模型默认 zh_core_web_md。
+
+子包根还提供默认适配器实例的绑定方法，便于直接调用：
+
+```python
+from rag_data.parsers import parse_document, chunk_document, resolve_parser
+```
+
+## 向量化（embedding）
+
+| 文件 | 内容 |
+| :--- | :--- |
+| base.py | BaseEmbeddingProvider 抽象：声明 backend 即自动注册 |
+| registry.py | provider 注册表与 register、resolve、create 系列函数 |
+| openai_provider.py | OpenAIEmbeddingProvider（官方 openai SDK） |
+| qwen_provider.py | QwenEmbeddingProvider（继承 OpenAI，DashScope 兼容模式） |
+| embedder.py | Embedder：按配置装配 provider，统一批次与维度校验 |
+
+### 内置 provider
+
+| provider | 默认模型 | 默认维度 | Key 环境变量 | 批量上限 |
+| :--- | :--- | :--- | :--- | :--- |
+| openai | text-embedding-3-small | 1536 | OPENAI_API_KEY | 无 |
+| qwen | qwen3.7-text-embedding | 1024 | DASHSCOPE_API_KEY | 10 |
+
+Embedder 的批次策略：取 embedding.batch_size 与 provider 的 max_batch_size 的较小者，因此 qwen 的 10 条上限自动生效。
 
 ### 自定义 provider：继承即注册
 
 ```python
-from rag_data import BaseEmbeddingProvider
-
+from rag_data.embedding import BaseEmbeddingProvider
 
 class LocalEmbeddingProvider(BaseEmbeddingProvider):
     backend = "local"                # 声明名字，类定义时自动注册
@@ -293,185 +166,83 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
         ...
 ```
 
-注册后即可在配置中直接使用：
-
-```json
-{ "embedding": { "provider": "local" } }
-```
-
-### 手动注册与注入
+Embedder 也支持注入实现 encode(texts) 的对象以绕过配置：
 
 ```python
-from rag_data import register_embedding, register_embedding_provider
+from rag_data.embedding import Embedder
 
-register_embedding("custom", "myapp.embedding.CustomProvider")   # 点分路径，惰性导入
-
-@register_embedding_provider("another")                     # 装饰器，直接持有类对象
-class AnotherProvider(BaseEmbeddingProvider):
-    ...
+embedder = Embedder(settings.embedding, logger, model=my_model)
 ```
 
-测试或接入已有模型时，可直接注入实现了 encode(texts) 的对象，绕过配置：
+## 日志（logging）
 
-```python
-from rag_data import Embedder
+logging 子包把三种日志库收敛到同一接口，调用方只依赖 LoggerAdapter。
 
-embedder = Embedder(settings, logger, model=my_model)
-```
-
-注入对象可选提供 max_batch_size 以限制单次条数。
-
-
-## 配置
-
-配置按模块分区，默认读取环境变量，也可在代码中硬编码，模型定义在 config.py。
-
-优先级由高到低：
-
-| 优先级 | 来源 | 示例 |
-| :--- | :--- | :--- |
-| 1 | 代码硬编码 | Settings.load(embedding={"provider": "qwen"}) |
-| 2 | 环境变量与 .env | RAG_EMBEDDING__PROVIDER=qwen |
-| 3 | 字段默认值 | 各分区模型内声明 |
-
-两者同时存在时以代码硬编码为准，未硬编码的字段由环境变量填充。
-
-分区与主要字段：
-
-| 分区 | 主要字段 |
+| 文件 | 内容 |
 | :--- | :--- |
-| parsing | spacy_model、max_chars（默认 500）、safe_max_chars（默认 2000） |
-| embedding | provider、model、dim、batch_size、api_key、base_url、timeout |
-| logging | backend、level、format、timezone |
+| base.py | LoggerAdapter 抽象：bind 与五个级别方法 |
+| factory.py | LoggerFactory：setup 全局装配与 get_logger 取用 |
+| stdlib_adapter.py | StdlibLogAdapter 与 StdlibTimezoneFormatter（按 tz 格式化时间） |
+| loguru_adapter.py | LoguruAdapter（惰性导入） |
+| structlog_adapter.py | StructlogAdapter（惰性导入） |
 
-### 加载方式
+```python
+from rag_data.logging import LoggerFactory
+
+LoggerFactory.setup(backend="structlog", level="INFO", timezone_name="Asia/Shanghai")
+logger = LoggerFactory.get_logger()
+```
+
+后端名称：stdliblog（默认）、structlog、loguru。format 留空时优先读 pyproject 的 log_cli_format，再回退内置默认（均含完整路径与行号）。
+
+时区 timezone 留空用系统本地，可填 UTC 或 IANA 名。
+
+## 流程门面（facade）
+
+facade.py 提供 RagData：一次装配 settings、logger、nlp 与 embedder，随后按流程调用。
 
 ```python
 from rag_data.config import Settings
+from rag_data.facade import RagData
 
-settings = Settings()                     # 默认读取环境变量（含 .env）
-settings = Settings.load()                # 同上，显式表达按环境变量加载
-settings = Settings.load(use_env=False)   # 忽略环境变量：仅用字段默认值，硬编码仍生效
+app = RagData(Settings.load_mapping())   # 只传 settings，parser 默认 ParserAdapter
 ```
 
-### 代码硬编码
+| 成员 | 说明 |
+| :--- | :--- |
+| settings、parser、logger、nlp、embedder | 构造后挂载的实例变量 |
+| parser_adapter | 解析派发入口，返回 ParserAdapter 实例 |
+| parse_document(path) | 委托 parser 解析单文件为纯文本 |
+| chunk_document(path, text) | 委托 parser 切块，长度取自 parsing 分区 |
 
-适合测试、脚本与嵌入式场景，优先级最高，可只覆盖部分字段：
+装配方法为模块级私有函数，构造时按分区调用：
 
-```python
-settings = Settings.load(
-    embedding={"provider": "qwen", "dim": 1024},
-    parsing={"max_chars": 180, "safe_max_chars": 2000},
-)
-settings = Settings.load({"embedding": {"provider": "qwen"}})   # 也可直接传字典
-```
+| 方法 | 说明 |
+| :--- | :--- |
+| _build_logger(logging_settings) | 装配日志适配层 |
+| _build_nlp(parsing_settings, logger) | 加载 spaCy，不可用则降级为 None |
+| _build_embedder(embedding_settings, logger, model=None) | 装配向量化组件 |
 
-门面与一键入口同样支持：
-
-```python
-from rag_data import RagData, build_settings
-
-settings = build_settings(embedding={"provider": "qwen"})
-app = RagData.create(overrides={"embedding": {"provider": "qwen"}})
-```
-
-### 环境变量
-
-分区与字段之间用双下划线分隔，名称大写：
-
-```bash
-RAG_EMBEDDING__PROVIDER=qwen
-RAG_EMBEDDING__DIM=512
-RAG_LOGGING__LEVEL=DEBUG
-RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(funcName)s() %(lineno)d] %(message)s
-RAG_LOGGING__TIMEZONE=Asia/Shanghai
-```
-
-取值按字段类型自动转换，对象与数组按 JSON 书写。
-分区名或字段名写错会抛 ConfigError，并列出可用值。
-
-### 日志后端与格式
-
-后端、级别、格式与时区由 logging 分区配置，门面装配时注入工厂：
-
-```python
-settings = Settings.load(logging={
-    "backend": "structlog",        # stdliblog（默认）、structlog、loguru
-    "level": "INFO",
-    "timezone": "Asia/Shanghai",   # 留空用系统本地时区
-})
-```
-
-人类可读行含源文件完整路径、方法名与行号：
-
-```text
-2026-10-07 18:42:50+0800 [INFO] [F:\workspace\src\rag_data\facade.py:98 parse()] 完成
-```
-
-format 留空时，优先取 pyproject 的 log_cli_format，再回退内置默认（均含完整路径与行号）。
-时区可填 UTC 或 IANA 名（需 Python 3.9 及以上），留空用系统本地；无法识别时装配报错。
+facade 的 __all__ 仅含 RagData。
 
 ## 目录结构
 
 ```text
 src/rag_data
-- __init__.py        公共入口，统一导出全部 API
-- config.py          pydantic-settings 配置
-- registry.py        通用注册表基类，provider 注册表复用
+- __init__.py        包根，仅导出当前目录直接模块的公共符号
+- __about__.py       版本号（hatch 版本来源）
+- config.py          分区配置模型与三类来源加载（load_mapping、load_env、load_yaml）
 - exceptions.py      领域异常
-- facade.py          流程门面，一站式封装各流程调用
-- parsers            文档解析器：DocumentParser 基类 + 各格式子类（markdown、txt、epub、pdf、word）
-- embedding          向量化接口、provider 注册表与 openai、qwen 实现
-- logging            日志适配层：LoggerFactory 与 stdlib、loguru、structlog 三个适配器
+- registry.py        通用注册表（Registry、Ref）
+- facade.py          流程门面，RagData 与私有装配方法 _build_*
+- parsers            文档解析：base、各格式子类与 parser_adapter
+- embedding          向量化：base、registry、openai/qwen provider、embedder
+- logging            日志适配层：base、factory 与三个适配器
 ```
 
 ## 待实现（TODO）
 
-以下复杂逻辑以 TODO 标注，待人工补全：
-
 - 解析细化：PDF 双栏、Word 表格等版面级处理
-- 向量化：兼容 embedding 接口的本地模型（如 sentence-transformers）provider
-- 数据保存：向量落库流程待存储层重新设计后补全
+- 向量化：兼容本地模型（如 sentence-transformers）的 provider
+- 数据保存：向量落库流程，待存储层重新设计后补全
 
-## 开发
-
-推荐使用 hatch 环境，无需手动激活虚拟环境：
-
-```bash
-# 默认环境（含 dev 工具）
-hatch run test      # pytest
-hatch run types     # mypy src tests
-hatch run check     # ruff check src tests
-hatch run format    # ruff format src tests
-
-# 开发环境（叠加全部可选依赖）
-hatch run rag_data_dev:test
-hatch run rag_data_dev:check
-
-hatch run rag_data_dev:pytest -- tests/test_integration_postgres.py -rs
-```
-
-若使用 uv 直接管理依赖：
-
-```bash
-uv venv
-uv pip install -e ".[dev]"
-uv run pytest
-```
-
-### 集成测试
-
-tests/test_integration_qwen_epub_milvus.py 是手工集成测试：真实解析 EPUB、切块、
-调用 Qwen 嵌入、写入 Milvus 并做相似度检索。默认由 addopts 的 -m 'not integration' 跳过，
-需备好凭据与 Milvus 服务后显式指定标记执行：
-
-```bash
-# Windows PowerShell
-$env:DASHSCOPE_API_KEY = "sk-xxx"
-$env:RAG_IT_MILVUS_URI = "http://127.0.0.1:19530"
-hatch run rag_data_dev:pytest -m integration -v -s
-```
-
-环境变量、默认集合名与安全约定见该文件头部注释。
-
-详细设计见 plan/DEVELOPMENT_PLAN.md。
