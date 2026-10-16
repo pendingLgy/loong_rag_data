@@ -6,10 +6,10 @@ import pytest
 
 from rag_data import facade
 from rag_data.config import Settings
-from rag_data.embedding.embedder import Embedder
-from rag_data.exceptions import ParseError
+from rag_data.embedding.embedder_handler import EmbedderHandler
+from rag_data.exceptions import ConfigError, ParseError
 from rag_data.logging.base import LoggerAdapter
-from rag_data.parsers.parser_adapter import ParserAdapter
+from rag_data.parsers.parser_handler import ParserHandler
 
 
 # ---------------- 测试替身 ----------------
@@ -57,22 +57,34 @@ class _FakeParser:
 
 @pytest.fixture()
 def det_settings():
-    # 不读取环境变量，保证配置可复现。
-    return Settings.load_mapping()
+    # 不读取环境变量，保证配置可复现；各分区默认关闭，这里统一打开以便测试装配分支。
+    return Settings.load_mapping(
+        parsing={'enable': True},
+        embedding={'enable': True},
+        logging={'enable': True},
+        llm={'enable': True},
+        db={'enable': True},
+        vector={'enable': True},
+    )
 
 
-def _install_fakes(monkeypatch, logger, nlp, embedder):
-    # 打桩三个私有装配方法，使 RagData 构造不触真实日志后端、spaCy 与向量 provider。
+def _install_fakes(monkeypatch, logger, nlp, embedder, db=None, vector=None):
+    # 打桩五个私有装配方法，使 RagData 构造不触真实日志后端、spaCy、向量 provider、关系库与向量库。
     monkeypatch.setattr(facade, '_build_logger', lambda *args, **kwargs: logger)
     monkeypatch.setattr(facade, '_build_nlp', lambda *args, **kwargs: nlp)
     monkeypatch.setattr(facade, '_build_embedder', lambda *args, **kwargs: embedder)
+    monkeypatch.setattr(facade, '_build_db', lambda *args, **kwargs: db if db is not None else object())
+    monkeypatch.setattr(facade, '_build_vector', lambda *args, **kwargs: vector if vector is not None else object())
 
 
 def _make_app(monkeypatch, settings, logger, nlp=None, parser=None):
-    # 构造经 monkeypatch 注入假组件的 RagData；parser 缺省时用真实 ParserAdapter。
-    embedder = Embedder(settings.embedding, logger, model=_FakeModel(dim=settings.embedding.dim))
+    # 构造经 monkeypatch 注入假组件的 RagData。
+    # RagData 不再接受 parser 参数；需要替身时打桩 facade.ParserHandler。
+    embedder = EmbedderHandler(settings.embedding, logger, model=_FakeModel(dim=settings.embedding.dim))
     _install_fakes(monkeypatch, logger, nlp if nlp is not None else object(), embedder)
-    return facade.RagData(settings, parser=parser)
+    if parser is not None:
+        monkeypatch.setattr(facade, 'ParserHandler', lambda *args, **kwargs: parser)
+    return facade.RagData(settings)
 
 
 # ---------------- _build_logger ----------------
@@ -135,13 +147,13 @@ def test_build_nlp_returns_handle_or_none(det_settings, logger):
 def test_build_embedder_injected_model(det_settings, logger):
     model = _FakeModel(dim=det_settings.embedding.dim)
     result = facade._build_embedder(det_settings.embedding, logger, model=model)
-    assert isinstance(result, Embedder)
+    assert isinstance(result, EmbedderHandler)
     assert result.provider is model
 
 
 def test_build_embedder_without_model_is_lazy(det_settings, logger):
     result = facade._build_embedder(det_settings.embedding, logger)
-    assert isinstance(result, Embedder)
+    assert isinstance(result, EmbedderHandler)
 
 
 # ---------------- RagData 构造 ----------------
@@ -150,8 +162,10 @@ def test_build_embedder_without_model_is_lazy(det_settings, logger):
 def test_ragdata_builds_components_from_settings(monkeypatch, det_settings, logger):
     # 构造只接收 settings，其余组件均由 _build_* 派生。
     nlp = object()
-    embedder = Embedder(det_settings.embedding, logger, model=_FakeModel(dim=det_settings.embedding.dim))
-    _install_fakes(monkeypatch, logger, nlp, embedder)
+    db = object()
+    vector = object()
+    embedder = EmbedderHandler(det_settings.embedding, logger, model=_FakeModel(dim=det_settings.embedding.dim))
+    _install_fakes(monkeypatch, logger, nlp, embedder, db=db, vector=vector)
 
     app = facade.RagData(det_settings)
 
@@ -159,11 +173,13 @@ def test_ragdata_builds_components_from_settings(monkeypatch, det_settings, logg
     assert app.logger is logger
     assert app.nlp is nlp
     assert app.embedder is embedder
-    assert isinstance(app.parser, ParserAdapter)
+    assert app.db is db
+    assert app.vector is vector
+    assert isinstance(app.parser, ParserHandler)
 
 
 def test_ragdata_passes_section_settings_to_builders(monkeypatch, det_settings, logger):
-    # 三个装配方法分别接收 logging、parsing、embedding 分区。
+    # 五个装配方法分别接收 logging、parsing、embedding、db、vector 分区。
     captured = {}
 
     def fake_logger(logging_settings):
@@ -178,35 +194,47 @@ def test_ragdata_passes_section_settings_to_builders(monkeypatch, det_settings, 
         captured['embedder'] = (embedding_settings, log)
         return object()
 
+    def fake_db(db_settings, log):
+        captured['db'] = (db_settings, log)
+        return object()
+
+    def fake_vector(vector_settings, log):
+        captured['vector'] = (vector_settings, log)
+        return object()
+
     monkeypatch.setattr(facade, '_build_logger', fake_logger)
     monkeypatch.setattr(facade, '_build_nlp', fake_nlp)
     monkeypatch.setattr(facade, '_build_embedder', fake_embedder)
+    monkeypatch.setattr(facade, '_build_db', fake_db)
+    monkeypatch.setattr(facade, '_build_vector', fake_vector)
 
     facade.RagData(det_settings)
 
     assert captured['logger'] is det_settings.logging
     assert captured['nlp'] == (det_settings.parsing, logger)
     assert captured['embedder'] == (det_settings.embedding, logger)
+    assert captured['db'] == (det_settings.db, logger)
+    assert captured['vector'] == (det_settings.vector, logger)
 
 
-def test_ragdata_keeps_injected_parser(monkeypatch, det_settings, logger):
+def test_ragdata_uses_patched_parser_handler(monkeypatch, det_settings, logger):
     parser = _FakeParser()
     app = _make_app(monkeypatch, det_settings, logger, parser=parser)
     assert app.parser is parser
 
 
-# ---------------- parser_adapter ----------------
+# ---------------- parser_handler ----------------
 
 
-def test_parser_adapter_returns_injected_parser(monkeypatch, det_settings, logger):
+def test_parser_handler_returns_patched_parser(monkeypatch, det_settings, logger):
     parser = _FakeParser()
     app = _make_app(monkeypatch, det_settings, logger, parser=parser)
-    assert app.parser_adapter is parser
+    assert app.parser_handler is parser
 
 
-def test_parser_adapter_default_is_parser_adapter_instance(monkeypatch, det_settings, logger):
+def test_parser_handler_defaults_to_real_handler(monkeypatch, det_settings, logger):
     app = _make_app(monkeypatch, det_settings, logger)
-    assert isinstance(app.parser_adapter, ParserAdapter)
+    assert isinstance(app.parser_handler, ParserHandler)
 
 
 # ---------------- parse_document ----------------
@@ -268,11 +296,192 @@ def test_chunk_document_propagates_parse_error(monkeypatch, det_settings, logger
 
 
 def test_ragdata_exposes_flow_members():
-    for name in ('parser_adapter', 'parse_document', 'chunk_document'):
+    for name in ('parser_handler', 'parse_document', 'chunk_document'):
         assert hasattr(facade.RagData, name)
 
 
 def test_facade_all_symbols():
     assert set(facade.__all__) == {'RagData'}
+
+
+
+# ---------------- _build_db ----------------
+
+
+class _FakeDB:
+    # 受控数据库替身：记录被装配的配置与日志适配器。
+    def __init__(self, settings, logger):
+        self.settings = settings
+        self.logger = logger
+
+
+def _install_fake_db(monkeypatch):
+    # 打桩 facade.build_database，捕获 DBSettings 与 logger。
+    captured = {}
+
+    def fake_build_database(settings, logger=None):
+        captured['settings'] = settings
+        captured['logger'] = logger
+        return _FakeDB(settings, logger)
+
+    monkeypatch.setattr(facade, 'build_database', fake_build_database)
+    return captured
+
+
+def test_build_db_delegates_settings(monkeypatch, det_settings):
+    captured = _install_fake_db(monkeypatch)
+    result = facade._build_db(det_settings.db, object())
+    assert isinstance(result, _FakeDB)
+    assert captured['settings'] is det_settings.db
+
+
+def test_build_db_sqlite_uses_configured_path(monkeypatch, det_settings):
+    captured = _install_fake_db(monkeypatch)
+    db = det_settings.db.model_copy(update={
+        'backend': 'sqlite',
+        'sqlite': det_settings.db.sqlite.model_copy(update={'path': 'store.db'}),
+    })
+    facade._build_db(db, object())
+    assert captured['settings'].backend == 'sqlite'
+    assert captured['settings'].sqlite.path == 'store.db'
+
+
+def test_build_db_passes_logger(monkeypatch, det_settings):
+    captured = _install_fake_db(monkeypatch)
+    sentinel = object()
+    facade._build_db(det_settings.db, sentinel)
+    assert captured['logger'] is sentinel
+
+
+
+def test_build_db_sqlite_requires_path(det_settings):
+    # 未配置 sqlite.path 时由装配层抛出明确配置错误。
+    with pytest.raises(ConfigError):
+        facade._build_db(det_settings.db, object())
+
+
+def test_build_db_reads_sqlite_path_from_env(monkeypatch, tmp_path):
+    captured = _install_fake_db(monkeypatch)
+    path = str(tmp_path / 'env.db')
+    settings = Settings.load_env({'RAG_DB__BACKEND': 'sqlite', 'RAG_DB__ENABLE': True,'RAG_DB__SQLITE__PATH': path})
+    facade._build_db(settings.db, object())
+    # print("DEBUG captured:", captured)
+
+    assert captured['settings'].sqlite.path == path
+
+
+
+# ---------------- 构造签名与解析器装配 ----------------
+
+
+def test_ragdata_signature_has_no_parser_param():
+    import inspect
+
+    parameters = inspect.signature(facade.RagData.__init__).parameters
+    assert 'parser' not in parameters
+    assert list(parameters) == ['self', 'settings']
+
+
+def test_ragdata_builds_parser_handler_with_parsing_limits(monkeypatch, det_settings, logger):
+    captured = {}
+
+    def fake_handler(**kwargs):
+        captured.update(kwargs)
+        return _FakeParser()
+
+    _install_fakes(monkeypatch, logger, object(), object())
+    monkeypatch.setattr(facade, 'ParserHandler', fake_handler)
+    facade.RagData(det_settings)
+    assert captured == {
+        'default_max_chars': det_settings.parsing.max_chars,
+        'default_safe_max_chars': det_settings.parsing.safe_max_chars,
+    }
+
+# ---------------- embedding 模块命名 ----------------
+
+
+def test_embedding_modules_renamed():
+    import rag_data.embedding.embedder_handler as handler_module
+    import rag_data.embedding.openai_embedder as openai_module
+    import rag_data.embedding.qwen_embedder as qwen_module
+    import rag_data.embedding.registry_embedder as registry_module
+
+    assert handler_module.__name__.endswith('.embedder_handler')
+    assert registry_module.__name__.endswith('.registry_embedder')
+    assert openai_module.__name__.endswith('.openai_embedder')
+    assert qwen_module.__name__.endswith('.qwen_embedder')
+
+
+def test_embedding_exports_handler_only():
+    import rag_data.embedding as embedding_package
+
+    assert 'EmbedderHandler' in embedding_package.__all__
+    assert 'Embedder' not in embedding_package.__all__
+    assert not hasattr(embedding_package, 'Embedder')
+
+
+def test_embedding_old_module_paths_are_gone():
+    import importlib
+
+    for path in (
+        'rag_data.embedding.embedder',
+        'rag_data.embedding.registry',
+        'rag_data.embedding.openai_provider',
+        'rag_data.embedding.qwen_provider',
+        'rag_data.embedding.registry_embedding',
+    ):
+        with pytest.raises(ImportError):
+            importlib.import_module(path)
+
+
+def test_embedding_registry_has_no_factory_api():
+    import rag_data.embedding.registry_embedder as registry_module
+
+    assert not hasattr(registry_module, 'create_embedding_provider')
+    assert not hasattr(registry_module, 'create')
+
+
+# ---------------- _build_vector ----------------
+
+
+def test_build_vector_delegates_settings(monkeypatch, det_settings):
+    captured = {}
+
+    def fake_builder(settings, logger=None, **kwargs):
+        captured['settings'] = settings
+        captured['logger'] = logger
+        return 'ENGINE'
+
+    monkeypatch.setattr(facade, 'build_vector_engine', fake_builder)
+    result = facade._build_vector(det_settings.vector, 'LOG')
+    assert result == 'ENGINE'
+    assert captured['settings'] is det_settings.vector
+    assert captured['logger'] == 'LOG'
+
+
+
+
+# ---------------- enable 门控 ----------------
+
+
+def test_builders_return_none_when_disabled():
+    '''各分区默认关闭时不初始化任何组件。'''
+    settings = Settings.load_mapping()
+    assert facade._build_logger(settings.logging) is not None
+    assert facade._build_nlp(settings.parsing, None) is None
+    assert facade._build_embedder(settings.embedding, None) is None
+    assert facade._build_db(settings.db, None) is None
+    assert facade._build_vector(settings.vector, None) is None
+
+
+def test_ragdata_skips_disabled_sections():
+    '''默认配置下 RagData 只装配解析器，其余组件均为 None。'''
+    app = facade.RagData(Settings.load_mapping())
+    assert app.logger is not None
+    assert app.nlp is None
+    assert app.embedder is None
+    assert app.db is None
+    assert app.vector is None
+    assert isinstance(app.parser, ParserHandler)
 
 

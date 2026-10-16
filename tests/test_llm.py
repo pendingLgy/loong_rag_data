@@ -1,6 +1,7 @@
-# 大模型模块单元测试：注册表、内置 provider 与 LLM 装配封装。
+# 大模型模块单元测试：纯注册表（只登记实现类）、内置 provider 与 LLMHandler 处理器。
 #
-# 不触网络：provider 仅校验类属性与配置解析，调用路径用注入的假模型隔离。
+# 不触网络：provider 仅校验类属性与配置解析，调用路径用注入的假模型隔离；
+# 注册表只登记实现类，实例化统一由 LLMHandler 在调用时完成。
 
 import pytest
 
@@ -8,13 +9,12 @@ from rag_data.config import LLMSettings, Settings
 from rag_data.exceptions import ConfigError, LLMError
 from rag_data.llm import (
     BUILTIN_PROVIDERS,
-    LLM,
+    LLMHandler,
     BaseLLMProvider,
     DeepSeekLLMProvider,
     OpenAILLMProvider,
     QwenLLMProvider,
     available_llm_providers,
-    create_llm_provider,
     is_llm_registered,
     register_llm,
     register_llm_provider,
@@ -56,8 +56,10 @@ def test_resolve_returns_provider_class():
     assert resolve_llm_provider('deepseek') is DeepSeekLLMProvider
 
 
-def test_create_llm_provider_builds_instance(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+def test_provider_class_instantiation(logger):
+    # 注册表只登记类，实例化由调用方完成。
+    provider_cls = resolve_llm_provider('openai')
+    provider = provider_cls(LLMSettings(), logger)
     assert isinstance(provider, BaseLLMProvider)
     assert provider.model == OpenAILLMProvider.default_model
 
@@ -113,14 +115,14 @@ def test_openai_defaults():
 
 
 def test_model_falls_back_to_default(logger):
-    provider = create_llm_provider('qwen', settings=LLMSettings(), logger=logger)
+    provider = QwenLLMProvider(LLMSettings(), logger)
     assert provider.model == 'qwen-plus'
     assert provider.base_url == QwenLLMProvider.default_base_url
 
 
 def test_model_configured_wins(logger):
     settings = LLMSettings(provider='qwen', model='qwen-max', base_url='http://localhost:1234/v1')
-    provider = create_llm_provider('qwen', settings=settings, logger=logger)
+    provider = QwenLLMProvider(settings, logger)
     assert provider.model == 'qwen-max'
     assert provider.base_url == 'http://localhost:1234/v1'
 
@@ -131,19 +133,19 @@ def test_model_configured_wins(logger):
 def test_api_key_from_config(logger, monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.setenv('OPENAI_API_KEY', 'env-key')
-    provider = create_llm_provider('openai', settings=LLMSettings(api_key='cfg-key'), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(api_key='cfg-key'), logger)
     assert provider.api_key == 'cfg-key'
 
 
 def test_api_key_from_env(logger, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'env-key')
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     assert provider.api_key == 'env-key'
 
 
 def test_api_key_missing_raises(logger, monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     with pytest.raises(LLMError):
         provider.api_key
 
@@ -152,7 +154,7 @@ def test_api_key_missing_raises(logger, monkeypatch):
 
 
 def test_request_kwargs_base_fields(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     kwargs = provider._build_request_kwargs([{'role': 'user', 'content': 'x'}], {})
     assert kwargs['model'] == OpenAILLMProvider.default_model
     assert kwargs['messages'] == [{'role': 'user', 'content': 'x'}]
@@ -161,73 +163,73 @@ def test_request_kwargs_base_fields(logger):
 
 
 def test_request_kwargs_max_tokens_optional(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(max_tokens=64), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(max_tokens=64), logger)
     kwargs = provider._build_request_kwargs([], {})
     assert kwargs['max_tokens'] == 64
 
 
 def test_request_kwargs_applies_overrides(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     kwargs = provider._build_request_kwargs([], {'top_p': 0.5})
     assert kwargs['top_p'] == 0.5
 
 
 def test_parse_extracts_message_content(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     data = {'choices': [{'message': {'content': 'hello'}}]}
     assert provider._parse(data) == 'hello'
 
 
 def test_parse_without_choices_raises(logger):
-    provider = create_llm_provider('openai', settings=LLMSettings(), logger=logger)
+    provider = OpenAILLMProvider(LLMSettings(), logger)
     with pytest.raises(LLMError):
         provider._parse({})
 
 
 
-# ---------------- LLM 装配封装 ----------------
+# ---------------- LLMHandler 处理器 ----------------
 
 
-def test_llm_uses_injected_model(logger):
+def test_handler_uses_injected_model(logger):
     model = _FakeModel(reply='hi')
-    client = LLM(LLMSettings(), logger, model=model)
+    client = LLMHandler(LLMSettings(), logger, model=model)
     out = client.chat([{'role': 'user', 'content': 'q'}])
     assert out == 'hi'
     assert model.calls == [([{'role': 'user', 'content': 'q'}], {})]
 
 
-def test_llm_provider_defaults_to_config(logger):
-    client = LLM(LLMSettings(provider='deepseek'), logger)
+def test_handler_provider_defaults_to_config(logger):
+    client = LLMHandler(LLMSettings(provider='deepseek'), logger)
     assert isinstance(client.provider, DeepSeekLLMProvider)
 
 
-def test_llm_keeps_injected_model_over_provider(logger):
+def test_handler_keeps_injected_model_over_provider(logger):
     model = _FakeModel()
-    client = LLM(LLMSettings(provider='qwen'), logger, model=model)
+    client = LLMHandler(LLMSettings(provider='qwen'), logger, model=model)
     assert client.provider is model
 
 
-def test_llm_complete_builds_messages(logger):
+def test_handler_complete_builds_messages(logger):
     model = _FakeModel(reply='ok')
-    client = LLM(LLMSettings(), logger, model=model)
+    client = LLMHandler(LLMSettings(), logger, model=model)
     assert client.complete('hi', system='sys') == 'ok'
     messages, overrides = model.calls[0]
     assert messages[0] == {'role': 'system', 'content': 'sys'}
     assert messages[1] == {'role': 'user', 'content': 'hi'}
 
 
-def test_llm_complete_without_system(logger):
+def test_handler_complete_without_system(logger):
     model = _FakeModel()
-    client = LLM(LLMSettings(), logger, model=model)
+    client = LLMHandler(LLMSettings(), logger, model=model)
     client.complete('hi')
     messages, _ = model.calls[0]
     assert len(messages) == 1
     assert messages[0]['role'] == 'user'
 
 
-def test_llm_chat_forwards_overrides(logger):
+def test_handler_chat_forwards_overrides(logger):
     model = _FakeModel()
-    client = LLM(LLMSettings(), logger, model=model)
+    client = LLMHandler(LLMSettings(), logger, model=model)
     client.chat([], top_p=0.3)
     assert model.calls[0][1] == {'top_p': 0.3}
 
@@ -261,4 +263,121 @@ def test_settings_rejects_unknown_llm_field():
     with pytest.raises(ValidationError):
         Settings.load_mapping(llm={'bogus': 1})
 
+
+
+# ---------------- 注册表只注册、不实例化 ----------------
+
+
+def test_registry_has_no_factory_api():
+    import rag_data.llm.registry_llm as registry_module
+
+    assert not hasattr(registry_module, 'create_llm_provider')
+    assert not hasattr(registry_module, 'create')
+
+
+def test_registry_resolves_user_class_object(logger):
+    class _UserProvider(BaseLLMProvider):
+        backend = None  # 不自动注册，改由 register_llm 显式登记
+
+        def chat(self, messages, **overrides):
+            return 'user'
+
+    register_llm('user-llm', _UserProvider)
+    assert resolve_llm_provider('user-llm') is _UserProvider
+    assert is_llm_registered('user-llm')
+
+
+def test_handler_instantiates_user_registered_provider(logger):
+    class _UserProvider(BaseLLMProvider):
+        backend = None
+
+        def __init__(self, settings, log):
+            super().__init__(settings, log)
+            self.calls = []
+
+        def chat(self, messages, **overrides):
+            self.calls.append(list(messages))
+            return 'custom-reply'
+
+    register_llm('handler-llm', _UserProvider)
+    handler = LLMHandler(LLMSettings(provider='handler-llm'), logger)
+    assert isinstance(handler.provider, _UserProvider)
+    assert handler.complete('hi') == 'custom-reply'
+
+
+def test_llm_package_exports_handler_only():
+    # 处理器以 LLMHandler 之名导出，旧的 LLM 名称不再存在。
+    import rag_data.llm as llm_package
+
+    assert 'LLMHandler' in llm_package.__all__
+    assert 'LLM' not in llm_package.__all__
+    assert not hasattr(llm_package, 'LLM')
+
+
+def test_modules_renamed():
+    # 旧模块 client 与 registry 已更名为 llm_handler 与 registry_llm。
+    import rag_data.llm.llm_handler as handler_module
+    import rag_data.llm.registry_llm as registry_module
+
+    assert handler_module.__name__.endswith('.llm_handler')
+    assert registry_module.__name__.endswith('.registry_llm')
+
+
+def test_handler_defers_instantiation(logger):
+    # 构造处理器只登记配置，不实例化 provider；首次调用才实例化。
+    created = []
+
+    class _Lazy(BaseLLMProvider):
+        backend = None
+
+        def __init__(self, settings, log):
+            super().__init__(settings, log)
+            created.append(self)
+
+        def chat(self, messages, **overrides):
+            return 'ok'
+
+    register_llm('lazy-llm', _Lazy)
+    handler = LLMHandler(LLMSettings(provider='lazy-llm'), logger)
+    assert created == []          # 构造阶段未实例化
+    handler.complete('hi')
+    assert len(created) == 1      # 调用后才实例化
+
+
+def test_handler_propagates_unknown_provider(logger):
+    handler = LLMHandler(LLMSettings(provider='definitely-missing'), logger)
+    with pytest.raises(ConfigError):
+        handler.complete('hi')
+
+
+def test_handler_caches_provider(logger):
+    # 同一处理器重复取 provider 只实例化一次。
+    created = []
+
+    class _Counting(BaseLLMProvider):
+        backend = None
+
+        def __init__(self, settings, log):
+            super().__init__(settings, log)
+            created.append(self)
+
+        def chat(self, messages, **overrides):
+            return 'ok'
+
+    register_llm('counting-llm', _Counting)
+    handler = LLMHandler(LLMSettings(provider='counting-llm'), logger)
+    first = handler.provider
+    second = handler.provider
+    assert first is second
+    assert len(created) == 1
+
+
+def test_old_module_paths_are_gone():
+    # 旧模块 client 与 registry 已删除，导入应失败，避免残留引用。
+    import importlib
+
+    with pytest.raises(ImportError):
+        importlib.import_module('rag_data.llm.client')
+    with pytest.raises(ImportError):
+        importlib.import_module('rag_data.llm.registry')
 

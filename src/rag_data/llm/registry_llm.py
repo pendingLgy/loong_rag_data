@@ -1,10 +1,12 @@
-# 大模型注册表：继承 BaseLLMProvider 即自动注册，配置改 provider 名即可切换。
+# 大模型注册表：支持用户注册自定义 LLM 实现，只负责注册与解析，不做实例化。
 #
-# 注册值可以是点分路径（惰性导入），也可以是类对象（函数内定义的本地类无法按路径导入）。
+# 注册方式二选一：继承 BaseLLMProvider 并声明 backend（自动注册），或调用 register_llm 显式登记。
+# 注册值可为类对象，也可为点分路径（首次解析时惰性导入）。
+# 实例化在 LLMHandler 调用时进行，本模块不持有任何实例。
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Type
+from typing import TYPE_CHECKING, Dict, List, Type
 
 from rag_data.registry import Ref, Registry
 
@@ -46,9 +48,3 @@ def available_llm_providers() -> List[str]:
 def resolve_llm_provider(name: str) -> Type[BaseLLMProvider]:
     "按 provider 名取得实现类，路径登记的在此惰性导入。"
     return _REGISTRY.resolve(name)
-
-
-def create_llm_provider(name: str, **kwargs: Any) -> BaseLLMProvider:
-    "按 provider 名创建实例，统一以关键字传入 settings 与 logger。"
-    return _REGISTRY.create(name, **kwargs)
-

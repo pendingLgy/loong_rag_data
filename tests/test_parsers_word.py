@@ -1,7 +1,7 @@
 # WordParser 单元测试：契约、解析依赖与异常、chunk 切块。
 #
 # chunk 用「假句柄」返回受控句子序列隔离模型；真实分句用 spacy.blank 的 sentencizer。
-# 解析用例需要 python-docx，未安装时逐个 importorskip 跳过。
+# 解析用例需要 python-docx，未安装时带原因跳过。
 
 import os
 import sys
@@ -114,7 +114,10 @@ def test_parse_rejects_legacy_doc_without_dependency():
 
 
 def test_parse_extracts_paragraphs_verbatim(tmp_path):
-    docx = pytest.importorskip("docx", reason="解析 docx 需要 python-docx")
+    try:
+        import docx
+    except ImportError as exc:
+        pytest.skip("缺少可选依赖 python-docx：" + str(exc) + "；安装方式：pip install python-docx")
     document = docx.Document()
     document.add_heading("标题一", level=1)
     document.add_paragraph("正文一。")
@@ -132,25 +135,25 @@ def test_parse_extracts_paragraphs_verbatim(tmp_path):
 # ---------------- 本机真实文件（可选） ----------------
 
 
-def _local_txt():
-    "返回本机可用于冒烟的 txt 路径；不可用则返回空串。"
+def _local_docx():
+    "返回本机可用于冒烟的 docx 路径；不可用则返回空串。"
     override = os.environ.get("RAG_TEST_DOCX","C:\\Users\\loong\\Desktop\\xxx.docx")
     if override:
         return override
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     if not os.path.isdir(desktop):
         return ""
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith(".txt"))
+    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith(".docx"))
     return os.path.join(desktop, files[0]) if files else ""
 
 
-_LOCAL_TXT = _local_txt()
+_LOCAL_DOCX = _local_docx()
 
 
-@pytest.mark.skipif(not _LOCAL_TXT or not os.path.exists(_LOCAL_TXT), reason="本机示例 txt 不存在")
-def test_local_txt_parse_then_chunk():
+@pytest.mark.skipif(not _LOCAL_DOCX or not os.path.exists(_LOCAL_DOCX), reason="本机示例 docx 不存在：请设置 RAG_TEST_DOCX，或把 .docx 放到桌面")
+def test_local_docx_parse_then_chunk():
     parser = WordParser(max_chars=500)
-    text = parser.parse(_LOCAL_TXT)
+    text = parser.parse(_LOCAL_DOCX)
     assert text.strip(), "解析结果不应为空"
 
     # 大文件逐字切句较慢；冒烟取前 2 万字符切块

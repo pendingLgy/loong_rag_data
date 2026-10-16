@@ -135,7 +135,7 @@ def _local_txt():
 _LOCAL_TXT = _local_txt()
 
 
-@pytest.mark.skipif(not _LOCAL_TXT or not os.path.exists(_LOCAL_TXT), reason="本机示例 txt 不存在")
+@pytest.mark.skipif(not _LOCAL_TXT or not os.path.exists(_LOCAL_TXT), reason="本机示例 txt 不存在：请设置 RAG_TEST_TXT，或把 .txt 放到桌面")
 def test_local_txt_parse_then_chunk():
     parser = TxtParser(max_chars=2000)
     text = parser.parse(_LOCAL_TXT)

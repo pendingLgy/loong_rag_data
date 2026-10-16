@@ -249,3 +249,8 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# SQLite 库文件（默认落在 rag_data 包根目录）
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3

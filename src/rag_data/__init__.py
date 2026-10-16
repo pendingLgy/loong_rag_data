@@ -1,9 +1,9 @@
 # rag-data 包根：仅导出当前目录（直接模块）的公共符号，不含子包与子目录内容。
 #
-# 子包 parsers、embedding、logging 的内容请按具体模块路径取用：
+# 子包 parsers、embedding、llm、logging 的内容请按具体模块路径取用：
 #
-#   from rag_data.parsers import ParserAdapter
-#   from rag_data.embedding import Embedder
+#   from rag_data.parsers import ParserHandler
+#   from rag_data.embedding import EmbedderAdapter
 #   from rag_data.logging import LoggerFactory
 
 from rag_data.__about__ import __version__

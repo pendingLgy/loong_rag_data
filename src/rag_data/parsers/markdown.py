@@ -16,6 +16,8 @@ CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"
 class MarkdownParser(DocumentParser):
     """Markdown：按行首 # 分成章节后各自递归切分。"""
 
+    backend = "markdown"
+
     SUFFIXES = frozenset({".md", ".markdown"})
 
     def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):

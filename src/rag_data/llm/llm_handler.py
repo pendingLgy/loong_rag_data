@@ -1,16 +1,16 @@
-# 大模型调用封装：provider 由配置选择，模型句柄可注入以便测试。
+# 大模型处理器：provider 由配置选择，实例化在调用时进行；模型句柄可注入以便测试。
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from rag_data.config import LLMSettings
-from rag_data.llm.registry import create_llm_provider
+from rag_data.llm.registry_llm import resolve_llm_provider
 from rag_data.logging.base import LoggerAdapter
 
 
-class LLM:
-    """大模型调用封装：按配置装配 provider，注入的 model 优先且绕过配置。"""
+class LLMHandler:
+    """大模型处理器：每次调用按配置解析并实例化 provider，注入的 model 优先且绕过配置。"""
 
     def __init__(self, settings: LLMSettings, logger: LoggerAdapter, model: Optional[Any] = None) -> None:
         self._settings = settings
@@ -39,11 +39,15 @@ class LLM:
     # ---------------- 内部实现 ----------------
 
     def _target(self) -> Any:
+        # 注册表只登记实现类，实例化在这里完成并按需缓存，避免重复构造。
         if self._model is not None:
             return self._model
         if self._provider is None:
             name = self._settings.provider
-            self._provider = create_llm_provider(name, settings=self._settings, logger=self._logger)
+            provider_cls = resolve_llm_provider(name)
+            self._provider = provider_cls(self._settings, self._logger)
+            if self._logger is None:  # logger 可选，缺失时跳过日志
+                return self._provider
             self._logger.info(
                 "LLM provider 已装配",
                 provider=name,

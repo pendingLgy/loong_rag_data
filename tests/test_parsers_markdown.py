@@ -141,7 +141,7 @@ def _local_md():
 _LOCAL_MD = _local_md()
 
 
-@pytest.mark.skipif(not _LOCAL_MD or not os.path.exists(_LOCAL_MD), reason="本机示例 markdown 不存在")
+@pytest.mark.skipif(not _LOCAL_MD or not os.path.exists(_LOCAL_MD), reason="本机示例 markdown 不存在：请设置 RAG_TEST_MD，或把 .md 放到桌面")
 def test_local_md_parse_then_chunk():
     parser = MarkdownParser(max_chars=500)
     text = parser.parse(_LOCAL_MD)

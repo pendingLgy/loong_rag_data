@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Union
 
 from rag_data.logging.base import LoggerAdapter
+from rag_data.parsers.registry_parser import register_parser
 
 DEFAULT_MODEL = "zh_core_web_md"
 
@@ -25,6 +26,16 @@ class DocumentParser(ABC):
 
     # 该解析器负责的扩展名（小写、含点）；子类必须覆盖，且不得与其它解析器重复。
     SUFFIXES: ClassVar[FrozenSet[str]] = frozenset()
+
+    # 注册表中的解析器名；子类置为该名字即自动登记，便于用户扩展。
+    backend: ClassVar[Optional[str]] = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """子类声明 backend 后自动注册，无需额外调用 register_parser。"""
+        super().__init_subclass__(**kwargs)
+        name = cls.__dict__.get("backend")
+        if isinstance(name, str) and name:
+            register_parser(name, cls)
 
     def __init__(self, max_chars: int = 500, safe_max_chars = 2000, logger: Optional[LoggerAdapter] = None):
         self.max_chars = max_chars

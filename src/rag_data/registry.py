@@ -49,7 +49,3 @@ class Registry(dict):
             module_path, _, attr = ref.rpartition(".")
             ref = getattr(importlib.import_module(module_path), attr)
         return ref
-
-    def create(self, name: str, **kwargs: Any) -> Any:
-        """按名字实例化，统一以关键字传入依赖。"""
-        return self.resolve(name)(**kwargs)

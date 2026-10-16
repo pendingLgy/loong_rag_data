@@ -8,10 +8,20 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+
 from rag_data.config import Settings
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import LoggerFactory, _load_pytest_log_format_from_toml
 from rag_data.logging.stdlib_adapter import StdlibLogAdapter, StdlibTimezoneFormatter
+
+
+def _require_module(module_name: str, install: str):
+    """确认可选日志后端可用；缺失时带依赖名与安装方式跳过。"""
+    try:
+        return __import__(module_name)
+    except ImportError as exc:
+        pytest.skip("缺少可选依赖 " + module_name + "（模块 " + module_name + "）：" + str(exc) + "；安装方式：" + install)
+
 
 EPOCH = 1704164645.0  # 2024-01-02 03:04:05 UTC
 PLUS8 = timezone(timedelta(hours=8))
@@ -152,7 +162,7 @@ def test_stdliblog_writes_full_path(capsys):
 
 
 def test_loguru_writes_full_path(capsys):
-    pytest.importorskip('loguru')
+    _require_module('loguru', 'pip install loguru')
     LoggerFactory.setup(backend='loguru', timezone_name='UTC')
     LoggerFactory.get_logger().info('hi')
     out = capsys.readouterr().out
@@ -163,7 +173,7 @@ def test_loguru_writes_full_path(capsys):
 # ---------------- 门面 ----------------
 
 def test_structlog_writes_full_path(capsys):
-    pytest.importorskip("structlog")
+    _require_module("structlog", "pip install structlog")
     LoggerFactory.setup(backend="structlog", timezone_name="UTC")
     LoggerFactory.get_logger().info("hi")
 

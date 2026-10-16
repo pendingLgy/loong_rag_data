@@ -1,13 +1,13 @@
-# 通义千问（DashScope 兼容模式）嵌入实现，沿用 OpenAI 请求格式。
+# 通义千问（DashScope 兼容模式）嵌入实现（embedder），沿用 OpenAI 请求格式。
 #
 # 与 OpenAI 仅默认模型、接口地址、API Key 环境变量与批量上限不同，故直接继承。
 
 from __future__ import annotations
 
-from rag_data.embedding.openai_provider import OpenAIEmbeddingProvider
+from rag_data.embedding.openai_embedder import OpenAIEmbedder
 
 
-class QwenEmbeddingProvider(OpenAIEmbeddingProvider):
+class QwenEmbedder(OpenAIEmbedder):
     """调用 DashScope 兼容接口；默认模型与端点见类属性，可按部署环境覆盖。"""
 
     backend = "qwen"

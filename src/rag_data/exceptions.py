@@ -33,3 +33,7 @@ class EmbeddingError(RagDataError):
 
 class LLMError(RagDataError):
     """大模型调用失败。"""
+
+
+class StorageError(RagDataError):
+    """存储读写失败。"""

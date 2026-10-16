@@ -123,7 +123,7 @@ def _local_epub():
 _LOCAL_EPUB = _local_epub()
 
 
-@pytest.mark.skipif(not _LOCAL_EPUB or not os.path.exists(_LOCAL_EPUB), reason="本机示例 epub 不存在")
+@pytest.mark.skipif(not _LOCAL_EPUB or not os.path.exists(_LOCAL_EPUB), reason="本机示例 epub 不存在：请设置 RAG_TEST_EPUB，或把 .epub 放到桌面")
 def test_local_epub_parse_then_chunk():
     parser = EpubParser(max_chars=500)
     text = parser.parse(_LOCAL_EPUB)

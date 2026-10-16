@@ -21,6 +21,8 @@ CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"
 class WordParser(DocumentParser):
     """Word：纯段落抽取正文，按自然文本递归切块。"""
 
+    backend = "word"
+
     SUFFIXES = frozenset({".docx"})
 
     def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):

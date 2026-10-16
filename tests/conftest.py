@@ -23,3 +23,10 @@ def logger(settings):
     LoggerFactory.setup(backend=settings.logging.backend, level=settings.logging.level)
     return LoggerFactory.get_logger()
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--integration",
+        action="store_true",
+        default=False,
+        help="运行真实调用外部服务的集成测试"
+    )

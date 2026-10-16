@@ -9,11 +9,11 @@ from typing import Any, Dict, List, Optional
 import openai
 from openai import OpenAI
 
-from rag_data.embedding.base import BaseEmbeddingProvider
+from rag_data.embedding.base import BaseEmbedder
 from rag_data.exceptions import EmbeddingError
 
 
-class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
+class OpenAIEmbedder(BaseEmbedder):
     """调用 OpenAI 的 embeddings 接口。"""
 
     backend = "openai"
@@ -31,7 +31,7 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
     def client(self) -> OpenAI:
         """惰性初始化 OpenAI 客户端"""
         if self._client is None:
-            timeout = self._settings.embedding.timeout
+            timeout = self._settings.timeout
             self._client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
@@ -65,7 +65,7 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
         }
 
         # 仅在显式配置了维度、且与默认维度不同时才传 dimensions，兼容不支持该参数的模型。
-        configured = self._settings.embedding.dim
+        configured = self._settings.dim
         if configured and configured != self.default_dim:
             kwargs["dimensions"] = configured
 

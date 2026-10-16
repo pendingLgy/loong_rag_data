@@ -1,29 +1,27 @@
-# 文本向量化：抽象接口、注册表与内置 provider。
+# 文本向量化：抽象接口、纯注册表（供用户注册自定义 embedder）与内置实现；实例化在适配器调用时进行。
 
-from rag_data.embedding.base import BaseEmbeddingProvider
-from rag_data.embedding.embedder import Embedder
-from rag_data.embedding.openai_provider import OpenAIEmbeddingProvider
-from rag_data.embedding.qwen_provider import QwenEmbeddingProvider
-from rag_data.embedding.registry import (
-    BUILTIN_PROVIDERS,
-    available_embedding_providers,
-    create_embedding_provider,
-    is_embedding_registered,
-    register_embedding,
-    register_embedding_provider,
-    resolve_embedding_provider,
+from rag_data.embedding.base import BaseEmbedder
+from rag_data.embedding.embedder_handler import EmbedderHandler
+from rag_data.embedding.openai_embedder import OpenAIEmbedder
+from rag_data.embedding.qwen_embedder import QwenEmbedder
+from rag_data.embedding.registry_embedder import (
+    BUILTIN_EMBEDDERS,
+    available_embedders,
+    is_embedder_registered,
+    register_embedder,
+    register_embedder_provider,
+    resolve_embedder,
 )
 
 __all__ = [
-    "BaseEmbeddingProvider",
-    "Embedder",
-    "OpenAIEmbeddingProvider",
-    "QwenEmbeddingProvider",
-    "register_embedding",
-    "register_embedding_provider",
-    "available_embedding_providers",
-    "is_embedding_registered",
-    "resolve_embedding_provider",
-    "create_embedding_provider",
-    "BUILTIN_PROVIDERS",
+    "BaseEmbedder",
+    "EmbedderHandler",
+    "OpenAIEmbedder",
+    "QwenEmbedder",
+    "register_embedder",
+    "register_embedder_provider",
+    "available_embedders",
+    "is_embedder_registered",
+    "resolve_embedder",
+    "BUILTIN_EMBEDDERS",
 ]

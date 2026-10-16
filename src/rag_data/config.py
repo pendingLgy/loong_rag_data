@@ -14,6 +14,10 @@
 #   RAG_LOGGING__LEVEL=DEBUG
 #   RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(lineno)d %(funcName)s()] %(message)s
 #   RAG_LOGGING__TIMEZONE=Asia/Shanghai
+#   RAG_DB__BACKEND=pg
+#   RAG_DB__MYSQL__HOST=127.0.0.1
+#   RAG_DB__MYSQL__PASSWORD=secret
+#   RAG_DB__SQLITE__PATH=data\rag_data.db
 
 from __future__ import annotations
 
@@ -31,12 +35,16 @@ SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
 SECTION_LOGGING = "logging"
 SECTION_LLM = "llm"
+SECTION_DB = "db"
+SECTION_VECTOR = "vector"
 
 MODULE_SECTIONS: List[str] = [
     SECTION_PARSING,
     SECTION_EMBEDDING,
     SECTION_LOGGING,
     SECTION_LLM,
+    SECTION_DB,
+    SECTION_VECTOR,
 ]
 
 # 环境变量前缀与分区分隔符，与 SettingsConfigDict 的 env_prefix、env_nested_delimiter 一致。
@@ -49,6 +57,9 @@ class ParsingSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=False)
+
     spacy_model: str = Field(default="zh_core_web_sm")
     # 单块字符上限，逐块累加句子至该长度即收块，注入给各解析器。
     max_chars: int = Field(default=500, gt=0)
@@ -59,6 +70,9 @@ class EmbeddingSettings(BaseModel):
     """向量化参数：provider 决定实现，其余为通用与实现专属配置。"""
 
     model_config = ConfigDict(extra="forbid")
+
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=False)
 
     # provider 名对应嵌入模型注册表中的键；继承 BaseEmbeddingProvider 即自动注册，
     # 内置 openai 与 qwen，可用 rag_data.available_embedding_providers() 查看。
@@ -79,6 +93,9 @@ class LoggingSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=True)
+
     backend: Literal["stdliblog", "structlog", "loguru"] = "stdliblog"
     level: str = Field(default="INFO")
     # 留空时由工厂读取 pyproject 的 log_cli_format，再回退内置默认。
@@ -90,6 +107,9 @@ class LLMSettings(BaseModel):
     """大模型参数：provider 决定实现，其余为通用与实现专属配置。"""
 
     model_config = ConfigDict(extra="forbid")
+
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=False)
 
     # provider 名对应大模型注册表中的键；内置 openai、qwen、deepseek，qwen 与 deepseek 兼容 OpenAI。
     provider: str = Field(default="openai")
@@ -105,6 +125,111 @@ class LLMSettings(BaseModel):
     base_url: str = Field(default="")
     timeout: float = Field(default=60.0, gt=0)
 
+
+class SQLiteSettings(BaseModel):
+    """SQLite 连接参数：path 为库文件路径，必须由使用方显式配置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 库文件路径；留空表示未配置，实例化时会报错。
+    path: str = Field(default="")
+
+
+class MySQLSettings(BaseModel):
+    """MySQL 连接参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(default="localhost")
+    port: int = Field(default=3306, gt=0)
+    user: str = Field(default="root")
+    password: str = Field(default="")
+    database: str = Field(default="rag_data")
+    charset: str = Field(default="utf8mb4")
+
+
+class PGSettings(BaseModel):
+    """PostgreSQL 连接参数；connection_string 非空时优先于离散字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = Field(default="localhost")
+    port: int = Field(default=5432, gt=0)
+    user: str = Field(default="postgres")
+    password: str = Field(default="")
+    database: str = Field(default="rag_data")
+    # 完整连接串；留空则由上面的离散字段拼装。
+    connection_string: str = Field(default="")
+
+class MilvusSettings(BaseModel):
+    """Milvus 连接参数；留空的字段交由实现层使用自身默认值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 服务地址；留空时用实现默认（本机 19530 端口）。
+    uri: str = Field(default="")
+    # 鉴权令牌；留空表示不鉴权。
+    token: str = Field(default="")
+    # 数据库名；留空表示使用 Milvus 默认库。
+    db_name: str = Field(default="")
+
+
+
+class PGVectorSettings(BaseModel):
+    """PostgreSQL 向量库参数；connection_string 非空时优先于离散字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_string: str = Field(default="")
+    host: str = Field(default="localhost")
+    port: int = Field(default=5432, gt=0)
+    user: str = Field(default="postgres")
+    password: str = Field(default="")
+    database: str = Field(default="rag_data")
+    # 是否为向量列建立 HNSW 索引。
+    use_hnsw: bool = Field(default=True)
+    # 是否尝试 DiskANN 索引（需 vectorscale 扩展；缺失时自动回退 HNSW）。
+    use_diskann: bool = Field(default=False)
+
+
+class VectorSettings(BaseModel):
+    """向量库分区：按 milvus、pg 承载连接参数，并统一集合与检索默认值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=False)
+
+    # 当前使用的向量后端名，对应 storage.vector_store 注册表中的键。
+    backend: Literal["milvus", "pg"] = Field(default="milvus")
+    # 集合名与向量维度。
+    collection: str = Field(default="rag_data")
+    vector_size: int = Field(default=1024, gt=0)
+    # 检索默认返回条数。
+    top_k: int = Field(default=5, gt=0)
+    # 距离度量类型。
+    metric_type: Literal["COSINE", "L2", "IP"] = Field(default="COSINE")
+
+    milvus: MilvusSettings = Field(default_factory=MilvusSettings)
+    pg: PGVectorSettings = Field(default_factory=PGVectorSettings)
+
+
+class DBSettings(BaseModel):
+    """数据库分区：按 sqlite、mysql、pg 分别承载连接参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 是否启用该分区；为 False 时门面不初始化对应组件。
+    enable: bool = Field(default=False)
+
+    # 当前使用的后端名，对应 storage.db 注册表中的键。
+    backend: Literal["sqlite", "mysql", "pg"] = Field(default="sqlite")
+
+    sqlite: SQLiteSettings = Field(default_factory=SQLiteSettings)
+    mysql: MySQLSettings = Field(default_factory=MySQLSettings)
+    pg: PGSettings = Field(default_factory=PGSettings)
+
+
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
@@ -112,6 +237,8 @@ SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
     SECTION_EMBEDDING: EmbeddingSettings,
     SECTION_LOGGING: LoggingSettings,
     SECTION_LLM: LLMSettings,
+    SECTION_DB: DBSettings,
+    SECTION_VECTOR: VectorSettings,
 }
 
 class Settings(BaseSettings):
@@ -131,6 +258,8 @@ class Settings(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    db: DBSettings = Field(default_factory=DBSettings)
+    vector: VectorSettings = Field(default_factory=VectorSettings)
 
     @classmethod
     def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "Settings":

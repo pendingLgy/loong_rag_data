@@ -16,6 +16,8 @@ CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"
 class TxtParser(DocumentParser):
     """纯文本：无结构，整篇交给基类递归切分。"""
 
+    backend = "txt"
+
     SUFFIXES = frozenset({".txt"})
 
     def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):

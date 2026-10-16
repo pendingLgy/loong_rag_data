@@ -1,19 +1,19 @@
-# 文本向量化封装：provider 由配置选择，模型句柄可注入以便测试。
+# 向量化处理器：embedder 由配置选择，实例化在调用时进行；模型句柄可注入以便测试。
 
 from __future__ import annotations
 
 from typing import Any, List, Optional
 
 from rag_data.config import EmbeddingSettings
-from rag_data.embedding.registry import create_embedding_provider
+from rag_data.embedding.registry_embedder import resolve_embedder
 from rag_data.exceptions import EmbeddingError
 from rag_data.logging.base import LoggerAdapter
 
 
-class Embedder:
-    """文本向量化封装：按配置装配 provider，注入的 model 优先且绕过配置。"""
+class EmbedderHandler:
+    """向量化处理器：按配置解析并实例化 embedder，注入的 model 优先且绕过配置。"""
 
-    def __init__(self, settings: EmbeddingSettings, logger: LoggerAdapter, model: Optional[Any] = None) -> None:
+    def __init__(self, settings: EmbeddingSettings, logger: Optional[LoggerAdapter] = None, model: Optional[Any] = None) -> None:
         self._settings = settings
         self._logger = logger
         # 注入的 model 只需实现 encode(texts)，可选提供 max_batch_size，便于测试与自定义。
@@ -22,7 +22,7 @@ class Embedder:
 
     @property
     def provider(self) -> Any:
-        """实际使用的编码对象：注入的 model 优先，否则按配置装配 provider。"""
+        """实际使用的编码对象：注入的 model 优先，否则按配置装配 embedder。"""
         return self._target()
 
     def encode(self, texts: List[str]) -> List[List[float]]:
@@ -44,23 +44,26 @@ class Embedder:
             return self._model
         if self._provider is None:
             name = self._settings.provider
-            self._provider = create_embedding_provider(name)
-            self._logger.info(
-                "Embedding provider 已装配",
-                provider=name,
-                model=getattr(self._provider, "model", ""),
-                dim=getattr(self._provider, "dim", 0),
-            )
+            embedder_cls = resolve_embedder(name)
+            self._provider = embedder_cls(self._settings, self._logger)
+
+            if self._logger:
+                self._logger.info(
+                    "Embedder 已装配",
+                    provider=name,
+                    model=getattr(self._provider, "model", ""),
+                    dim=getattr(self._provider, "dim", 0),
+                )
         return self._provider
 
     def _batch_size(self, target: Any) -> int:
-        """批次大小：取配置值与 provider 单次上限的较小者，上限为 0 表示不限制。"""
+        """批次大小：取配置值与 embedder 单次上限的较小者，上限为 0 表示不限制。"""
         size = self._settings.batch_size
         limit = int(getattr(target, "max_batch_size", 0) or 0)
         return min(size, limit) if limit > 0 else size
 
     def _encode_batch(self, target: Any, batch: List[str]) -> List[List[float]]:
-        """编码单批文本；是否归一化由 provider 决定，此处仅透传结果。"""
+        """编码单批文本；是否归一化由 embedder 决定，此处仅透传结果。"""
         result = target.encode(batch)
         return [list(map(float, row)) for row in result]
 

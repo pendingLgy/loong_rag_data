@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
 from rag_data.exceptions import LLMError
-from rag_data.llm.registry import register_llm
+from rag_data.llm.registry_llm import register_llm
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import LLMSettings

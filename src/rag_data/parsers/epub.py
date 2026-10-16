@@ -16,6 +16,8 @@ CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"
 class EpubParser(DocumentParser):
     """EPUB：按段落收集并依据字符大小邻近聚合，支持段落级与句级重叠切块（含全套内存安全优化）。"""
 
+    backend = "epub"
+
     SUFFIXES = frozenset({".epub"})
 
     def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
@@ -43,7 +45,7 @@ class EpubParser(DocumentParser):
 
         full_text = "\n".join(all_paras)
         if self.logger is not None:
-            self.logger.info(
+            self.logger.debug(
                 "EPUB 解析完成",
                 source_path=path,
                 chapters=len(chapter_paragraphs),
@@ -78,7 +80,7 @@ class EpubParser(DocumentParser):
                 continue
 
             if self.logger is not None:
-                self.logger.info(
+                self.logger.debug(
                     "EPUB chunk start",
                     idx=idx,
                     chap_length=len(chap),
@@ -89,7 +91,7 @@ class EpubParser(DocumentParser):
             min_chunks = self._process_text_recursive(text=chap, overlap_prefix=current_overlap_prefix, nlp=handle)
 
             if self.logger is not None:
-                self.logger.info(
+                self.logger.debug(
                     "EPUB chunk end",
                     idx=idx
                 )

@@ -18,6 +18,8 @@ PARAGRAPH_END_PUNCT = ("。", "！", "？", "…", ".", "!", "?", "”", "’")
 class PdfParser(DocumentParser):
     """PDF：使用 pdfplumber 提取正文，支持过滤页眉页脚，基于物理坐标与自然排版逻辑智能重组段落。"""
 
+    backend = "pdf"
+
     SUFFIXES = frozenset({".pdf"})
 
     def __init__(

@@ -1,7 +1,7 @@
 # PdfParser 单元测试：契约、解析依赖、chunk 切块与本机文件。
 #
 # chunk 用「假句柄」返回受控句子序列隔离模型；真实分句用 spacy.blank 的 sentencizer。
-# 解析用例需要 pypdf，未安装时逐个 importorskip 跳过。
+# 解析用例需要 pdfplumber，未安装时逐个带原因跳过。
 
 import os
 import sys
@@ -124,11 +124,14 @@ def _local_pdf():
 _LOCAL_PDF = _local_pdf()
 
 
-@pytest.mark.skipif(not _LOCAL_PDF or not os.path.exists(_LOCAL_PDF), reason="本机示例 pdf 不存在")
+@pytest.mark.skipif(not _LOCAL_PDF or not os.path.exists(_LOCAL_PDF), reason="本机示例 pdf 不存在：请设置 RAG_TEST_PDF，或把 .pdf 放到桌面")
 def test_local_pdf_parse_then_chunk():
-    pytest.importorskip("pdfplumber", reason="解析本机 pdf 需要 pdfplumber")
+    try:
+        import pdfplumber  # noqa: F401
+    except ImportError as exc:
+        pytest.skip("缺少可选依赖 pdfplumber：" + str(exc) + "；安装方式：pip install pdfplumber")
     if os.path.getsize(_LOCAL_PDF) > 15 * 1024 * 1024:
-        pytest.skip("本机 pdf 过大，跳过以避免长耗时")
+        pytest.skip("本机 pdf 过大（" + str(os.path.getsize(_LOCAL_PDF)) + " 字节，上限 15MB），跳过以避免长耗时")
     parser = PdfParser(max_chars=500)
     text = parser.parse(_LOCAL_PDF)
     assert text.strip(), "解析结果不应为空"

@@ -6,15 +6,15 @@ import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, List, Optional
 
-from rag_data.embedding.registry import register_embedding
+from rag_data.embedding.registry_embedder import register_embedder
 from rag_data.exceptions import EmbeddingError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import Settings
+    from rag_data.config import Settings, EmbeddingSettings
     from rag_data.logging.base import LoggerAdapter
 
 
-class BaseEmbeddingProvider(ABC):
+class BaseEmbedder(ABC):
     """嵌入模型的统一接口：声明 backend 后自动登记，配置只写 provider 名即可切换。"""
 
     # 配置中 embedding.provider 的取值；子类置为该名字即自动登记。
@@ -36,9 +36,9 @@ class BaseEmbeddingProvider(ABC):
         name = cls.__dict__.get("backend")
         if isinstance(name, str) and name:
             # 直接登记类对象，避免本地类因 qualname 无法按路径导入。
-            register_embedding(name, cls)
+            register_embedder(name, cls)
 
-    def __init__(self, settings: Settings, logger: LoggerAdapter) -> None:
+    def __init__(self, settings: EmbeddingSettings, logger: LoggerAdapter) -> None:
         self._settings = settings
         self._logger = logger
 
@@ -47,22 +47,22 @@ class BaseEmbeddingProvider(ABC):
     @property
     def model(self) -> str:
         """实际使用的模型名：配置优先，缺省回落到 default_model。"""
-        return self._settings.embedding.model or self.default_model
+        return self._settings.model or self.default_model
 
     @property
     def base_url(self) -> str:
         """实际使用的接口地址：配置优先，缺省回落到 default_base_url。"""
-        return self._settings.embedding.base_url or self.default_base_url
+        return self._settings.base_url or self.default_base_url
 
     @property
     def dim(self) -> int:
         """期望的输出维度：由 embedding.dim 声明，供向量化结果校验。"""
-        return self._settings.embedding.dim
+        return self._settings.dim
 
     @property
     def api_key(self) -> str:
-        """API Key：配置优先，其次读取 provider 约定的环境变量。"""
-        key = self._settings.embedding.api_key or os.environ.get(self.api_key_env, "")
+        """API Key：配置优先，其次读取 embedder 约定的环境变量。"""
+        key = self._settings.api_key or os.environ.get(self.api_key_env, "")
         if not key:
             raise EmbeddingError(
                 "缺少 " + str(self.backend) + " 的 API Key：请设置环境变量 " + self.api_key_env + "，或配置 embedding.api_key"
