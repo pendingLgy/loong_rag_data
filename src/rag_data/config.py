@@ -1,7 +1,7 @@
 # 配置模型：按模块分区，默认读取环境变量，也支持在代码中硬编码。
 #
 # 优先级由高到低：
-#   1. 代码硬编码：Settings.load_mapping(embedding={"provider": "qwen"})
+#   1. 代码硬编码：RagSetting.load_mapping(embedding={"provider": "qwen"})
 #   2. 环境变量：RAG_<分区>__<字段>，如 RAG_EMBEDDING__DIM=1024
 #   3. 字段默认值
 #
@@ -14,41 +14,40 @@
 #   RAG_LOGGING__LEVEL=DEBUG
 #   RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(lineno)d %(funcName)s()] %(message)s
 #   RAG_LOGGING__TIMEZONE=Asia/Shanghai
-#   RAG_DB__BACKEND=pg
-#   RAG_DB__MYSQL__HOST=127.0.0.1
-#   RAG_DB__MYSQL__PASSWORD=secret
-#   RAG_DB__SQLITE__PATH=data\rag_data.db
+#
+# 记忆分区独立于 RagSetting，前缀为 RAG_MEMORY_，例如：
+#   RAG_MEMORY__ENABLE=true
+#   RAG_MEMORY__DB__BACKEND=pg
+#   RAG_MEMORY__DB__MYSQL__HOST=127.0.0.1
+#   RAG_MEMORY__DB__MYSQL__PASSWORD=secret
+#   RAG_MEMORY__DB__SQLITE__PATH=data\rag_data.db
 
 from __future__ import annotations
 
 import json
 import os
 from collections.abc import Mapping
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from rag_data.exceptions import ConfigError, OptionalDependencyError
 
 SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
 SECTION_LOGGING = "logging"
-SECTION_LLM = "llm"
-SECTION_DB = "db"
-SECTION_VECTOR = "vector"
 
 MODULE_SECTIONS: List[str] = [
     SECTION_PARSING,
     SECTION_EMBEDDING,
     SECTION_LOGGING,
-    SECTION_LLM,
-    SECTION_DB,
-    SECTION_VECTOR,
 ]
 
-# 环境变量前缀与分区分隔符，与 SettingsConfigDict 的 env_prefix、env_nested_delimiter 一致。
+# 环境变量前缀与嵌套分隔符：解析侧供 SettingsConfigDict 使用，记忆侧供手工解析使用。
 ENV_PREFIX = "RAG_"
+# 记忆分区独立装配，使用独立前缀，避免与 RagSetting 的分区键冲突。
+MEMORY_ENV_PREFIX = ENV_PREFIX + "MEMORY_"
 ENV_NESTED_DELIMITER = "__"
 
 
@@ -174,7 +173,6 @@ class MilvusSettings(BaseModel):
     db_name: str = Field(default="")
 
 
-
 class PGVectorSettings(BaseModel):
     """PostgreSQL 向量库参数；connection_string 非空时优先于离散字段。"""
 
@@ -230,18 +228,91 @@ class DBSettings(BaseModel):
     pg: PGSettings = Field(default_factory=PGSettings)
 
 
+class _MemoryEnvSource(PydanticBaseSettingsSource):
+    """读取 RAG_MEMORY_ 前缀环境变量，产出 MemorySettings 的字段字典。
+
+    不复用 pydantic-settings 的原生前缀解析：前缀以单下划线结尾、嵌套又以双下划线
+    分隔时，RAG_MEMORY__DB__BACKEND 会被切成 _DB 与 BACKEND，导致 db 等嵌套字段
+    读不到值。这里改走与 load_env 相同的解析，两种下划线写法行为一致。
+    """
+
+    def get_field_value(self, field: Any, field_name: str) -> Tuple[Any, str, bool]:
+        """整份字段字典一次性产出，故不按单字段取值。"""
+        return None, field_name, False
+
+    def __call__(self) -> Dict[str, Any]:
+        return _load_memory_env_overrides()
+
+
+class MemorySettings(BaseSettings):
+    """记忆分区：与 RagSetting 相互独立，自带 llm、db、vector 三类子配置。"""
+
+    model_config = SettingsConfigDict(
+        # 前缀以单下划线结尾、嵌套又以双下划线分隔，原生解析会把 RAG_MEMORY__DB__BACKEND
+        # 切成 _DB 与 BACKEND；故关闭原生 env 解析与 .env 文件，改由
+        # settings_customise_sources 挂载 _MemoryEnvSource，与 load_env 共用同一套解析。
+        # 未知字段仍直接报错，避免拼写错误被静默忽略。
+        extra="forbid",
+    )
+
+    # 分区开关；关闭时门面不装配 MemoryHandler。
+    enable: bool = Field(default=False)
+
+    # 三类依赖：大模型（事实抽取）、关系库（历史与消息）、向量库（记忆检索）。
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    db: DBSettings = Field(default_factory=DBSettings)
+    vector: VectorSettings = Field(default_factory=VectorSettings)
+
+    # ---------------- 三类来源 ----------------
+
+    @classmethod
+    def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "MemorySettings":
+        """来源一：解析字典（JSON 对象），不读取环境变量。"""
+        hardcoded = _as_mapping(source, cls.__name__)
+        layered = _merge_sections(hardcoded, overrides)
+        return cls(**_with_model_defaults(cls, layered))
+
+    @classmethod
+    def load_env(cls, environ: Optional[Mapping[str, str]] = None, **overrides: Any) -> "MemorySettings":
+        """来源二：解析 RAG_MEMORY_ 前缀的环境变量，键形如 RAG_MEMORY__DB__HOST。"""
+        env_data = _load_memory_env_overrides(environ)
+        layered = _merge_sections(env_data, overrides)
+        return cls(**_with_model_defaults(cls, layered))
+
+    @classmethod
+    def load_yaml(cls, path: str, **overrides: Any) -> "MemorySettings":
+        """来源三：解析 config.yml 文件，内容为 MemorySettings 字段的映射。"""
+        file_data = _as_yaml_mapping(path)
+        layered = _merge_sections(file_data, overrides)
+        return cls(**_with_model_defaults(cls, layered))
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: Type["MemorySettings"],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        """初始化实参优先，RAG_MEMORY_ 环境变量次之。
+
+        不挂载原生 env 解析与 .env 源：前者受前缀与分隔符冲突影响，后者键规则
+        与 load_env 不一致；需要文件来源时改用 load_yaml。
+        """
+        return (init_settings, _MemoryEnvSource(settings_cls))
+
+
 # 分区名到分区模型的映射。
 # 关闭环境变量时用它补齐字段默认值，使构造实参覆盖全部字段。
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
     SECTION_PARSING: ParsingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
     SECTION_LOGGING: LoggingSettings,
-    SECTION_LLM: LLMSettings,
-    SECTION_DB: DBSettings,
-    SECTION_VECTOR: VectorSettings,
 }
 
-class Settings(BaseSettings):
+
+class RagSetting(BaseSettings):
     """根配置：按模块分区的嵌套模型，默认读取 RAG_ 前缀的环境变量。"""
 
     model_config = SettingsConfigDict(
@@ -257,12 +328,9 @@ class Settings(BaseSettings):
     parsing: ParsingSettings = Field(default_factory=ParsingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
-    llm: LLMSettings = Field(default_factory=LLMSettings)
-    db: DBSettings = Field(default_factory=DBSettings)
-    vector: VectorSettings = Field(default_factory=VectorSettings)
 
     @classmethod
-    def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "Settings":
+    def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "RagSetting":
         '''来源一：解析 JSON 对象（分区的字典），不读取环境变量。'''
         hardcoded = cls._read_mapping(source)
         _validate_sections(hardcoded, overrides)
@@ -270,7 +338,7 @@ class Settings(BaseSettings):
         return cls(**_with_defaults(layered))
 
     @classmethod
-    def load_env(cls, environ: Optional[Mapping[str, str]] = None, **overrides: Any) -> "Settings":
+    def load_env(cls, environ: Optional[Mapping[str, str]] = None, **overrides: Any) -> "RagSetting":
         '''来源二：解析环境变量，RAG_ 前缀、双下划线分隔，键如 RAG_EMBEDDING__DIM。'''
         env_data = cls._read_env(environ)
         _validate_sections(overrides)
@@ -278,7 +346,7 @@ class Settings(BaseSettings):
         return cls(**_with_defaults(layered))
 
     @classmethod
-    def load_yaml(cls, path: str, **overrides: Any) -> "Settings":
+    def load_yaml(cls, path: str, **overrides: Any) -> "RagSetting":
         '''来源三：解析 config.yml 文件，内容需为分区的映射。'''
         file_data = cls._read_yaml(path)
         _validate_sections(file_data, overrides)
@@ -289,12 +357,9 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _read_mapping(source: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-        '''解析 JSON 对象：确认为分区的映射后原样返回。'''
-        if source is None:
-            return {}
-        if not isinstance(source, Mapping):
-            raise ConfigError('''配置源需为分区的字典（JSON 对象）；如需读取文件请用 Settings.load_yaml''')
-        return dict(source)
+        """解析 JSON 对象：确认为字典映射后原样返回。"""
+        return _as_mapping(source, "RagSetting")
+
 
     @staticmethod
     def _read_env(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
@@ -303,18 +368,8 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _read_yaml(path: str) -> Dict[str, Any]:
-        '''解析 config.yml：惰性导入 PyYAML，内容需为分区的映射。'''
-        yaml = _import_yaml()
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = yaml.safe_load(handle)
-        except OSError as exc:
-            raise ConfigError('''无法读取配置文件：''' + str(path)) from exc
-        if data is None:
-            return {}
-        if not isinstance(data, Mapping):
-            raise ConfigError('''配置文件需为分区的映射：''' + str(path))
-        return dict(data)
+        """解析 config.yml：惰性导入 PyYAML，内容需为字典映射。"""
+        return _as_yaml_mapping(path)
 
 
 def _load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
@@ -333,6 +388,21 @@ def _load_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str
 def _filter_sections(data: Dict[str, Any]) -> Dict[str, Any]:
     """仅保留已知分区，忽略环境中无关的 RAG_ 变量。"""
     return {name: value for name, value in data.items() if name in MODULE_SECTIONS}
+
+def _load_memory_env_overrides(environ: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+    """把 RAG_MEMORY_ 前缀的环境变量组装为字段字典，键形如 RAG_MEMORY__DB__HOST。"""
+    source = os.environ if environ is None else environ
+    data: Dict[str, Any] = {}
+    for key, raw in source.items():
+        if not key.startswith(MEMORY_ENV_PREFIX):
+            continue
+        # 去掉前缀后再剥掉一个分隔下划线，兼容 RAG_MEMORY__X 与 RAG_MEMORY_X 两种写法。
+        remainder = key[len(MEMORY_ENV_PREFIX):].lstrip("_")
+        parts = [part.lower() for part in remainder.split(ENV_NESTED_DELIMITER) if part]
+        if parts:
+            _assign_nested(data, parts, _parse_env_value(raw))
+    return data
+
 
 def _validate_sections(*groups: Mapping[str, Any]) -> None:
     """校验代码硬编码中的分区名合法。"""
@@ -367,6 +437,42 @@ def _with_defaults(layered: Mapping[str, Any]) -> Dict[str, Any]:
             section.update(override)
         filled[name] = section
     return filled
+
+def _as_mapping(source: Optional[Mapping[str, Any]], loader: str) -> Dict[str, Any]:
+    """校验配置源为字典后原样复制；非字典时提示改用 load_yaml。"""
+    if source is None:
+        return {}
+    if not isinstance(source, Mapping):
+        raise ConfigError("配置源需为字典映射（JSON 对象）；如需读取文件请用 " + loader + ".load_yaml")
+    return dict(source)
+
+def _as_yaml_mapping(path: str) -> Dict[str, Any]:
+    """读取 config.yml 并校验为字典映射；PyYAML 缺失时抛 OptionalDependencyError。"""
+    yaml = _import_yaml()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except OSError as exc:
+        raise ConfigError("无法读取配置文件：" + str(path)) from exc
+    if data is None:
+        return {}
+    if not isinstance(data, Mapping):
+        raise ConfigError("配置文件需为字典映射：" + str(path))
+    return dict(data)
+
+def _with_model_defaults(model_cls: Type[BaseModel], layered: Mapping[str, Any]) -> Dict[str, Any]:
+    """用字段默认值补齐全部顶层键，屏蔽环境变量，再叠加来源数据。
+
+    MemorySettings 是 BaseSettings，直接实例化会读取环境变量；这里改为从
+    model_fields 取默认值，保证 load_mapping 与 load_yaml 不读环境。
+    """
+    filled: Dict[str, Any] = {}
+    for name, field in model_cls.model_fields.items():
+        factory = field.default_factory
+        filled[name] = factory() if factory is not None else field.default
+    filled.update(layered)
+    return filled
+
 
 def _assign_nested(data: Dict[str, Any], parts: List[str], value: Any) -> None:
     """按路径写入嵌套字典，如 ["embedding", "dim"]。"""

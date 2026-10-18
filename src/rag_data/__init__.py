@@ -10,15 +10,16 @@ from rag_data.__about__ import __version__
 from rag_data.config import (
     ENV_NESTED_DELIMITER,
     ENV_PREFIX,
+    MEMORY_ENV_PREFIX,
     SECTION_EMBEDDING,
-    SECTION_LLM,
     SECTION_LOGGING,
     SECTION_PARSING,
     EmbeddingSettings,
     LLMSettings,
     LoggingSettings,
+    MemorySettings,
     ParsingSettings,
-    Settings,
+    RagSetting,
 )
 from rag_data.exceptions import (
     ConfigError,
@@ -30,23 +31,24 @@ from rag_data.exceptions import (
     ParserDependencyError,
     RagDataError,
 )
-from rag_data.facade import RagData
+from rag_data.facade import MemoryServer, RagData
 from rag_data.registry import Ref, Registry
 
 __all__ = [
     "__version__",
     # 配置
-    "Settings",
+    "RagSetting",
     "ParsingSettings",
     "EmbeddingSettings",
     "LoggingSettings",
     "LLMSettings",
+    "MemorySettings",
     "ENV_PREFIX",
     "ENV_NESTED_DELIMITER",
+    "MEMORY_ENV_PREFIX",
     "SECTION_PARSING",
     "SECTION_EMBEDDING",
     "SECTION_LOGGING",
-    "SECTION_LLM",
     # 契约异常
     "RagDataError",
     "ConfigError",
@@ -60,5 +62,6 @@ __all__ = [
     "Registry",
     "Ref",
     # 流程门面
+    "MemoryServer",
     "RagData",
 ]

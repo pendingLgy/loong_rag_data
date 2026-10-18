@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 
-from rag_data.config import Settings
+from rag_data.config import RagSetting
 from rag_data.logging.base import LoggerAdapter
 from rag_data.logging.factory import LoggerFactory, _load_pytest_log_format_from_toml
 from rag_data.logging.stdlib_adapter import StdlibLogAdapter, StdlibTimezoneFormatter
@@ -47,7 +47,7 @@ def _record(message='hi', lineno=42, func='run'):
 
 
 def test_default_logging_settings():
-    logging_settings = Settings.load_mapping().logging
+    logging_settings = RagSetting.load_mapping().logging
     assert logging_settings.backend == 'stdliblog'
     assert logging_settings.level == 'INFO'
     assert logging_settings.format == ''
@@ -55,7 +55,7 @@ def test_default_logging_settings():
 
 
 def test_logging_settings_are_configurable():
-    logging_settings = Settings.load_mapping(logging={'backend': 'loguru', 'timezone': 'UTC'}).logging
+    logging_settings = RagSetting.load_mapping(logging={'backend': 'loguru', 'timezone': 'UTC'}).logging
     assert logging_settings.backend == 'loguru'
     assert logging_settings.timezone == 'UTC'
 

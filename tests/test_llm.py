@@ -5,7 +5,7 @@
 
 import pytest
 
-from rag_data.config import LLMSettings, Settings
+from rag_data.config import LLMSettings, RagSetting
 from rag_data.exceptions import ConfigError, LLMError
 from rag_data.llm import (
     BUILTIN_PROVIDERS,
@@ -244,24 +244,6 @@ def test_llm_settings_defaults():
     assert settings.temperature == 0.7
     assert settings.max_tokens == 0
     assert settings.timeout == 60.0
-
-
-def test_settings_exposes_llm_section():
-    settings = Settings.load_mapping()
-    assert isinstance(settings.llm, LLMSettings)
-
-
-def test_settings_loads_llm_overrides():
-    settings = Settings.load_mapping(llm={'provider': 'qwen', 'model': 'qwen-max', 'max_tokens': 128})
-    assert settings.llm.provider == 'qwen'
-    assert settings.llm.model == 'qwen-max'
-    assert settings.llm.max_tokens == 128
-
-
-def test_settings_rejects_unknown_llm_field():
-    from pydantic import ValidationError
-    with pytest.raises(ValidationError):
-        Settings.load_mapping(llm={'bogus': 1})
 
 
 

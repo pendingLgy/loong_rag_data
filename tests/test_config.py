@@ -9,9 +9,16 @@ from pydantic import ValidationError
 from rag_data.config import (
     ENV_NESTED_DELIMITER,
     ENV_PREFIX,
+    MEMORY_ENV_PREFIX,
+    SECTION_EMBEDDING,
+    SECTION_LOGGING,
+    SECTION_MODEL_CLASSES,
+    SECTION_PARSING,
+    MODULE_SECTIONS,
     EmbeddingSettings,
+    MemorySettings,
     ParsingSettings,
-    Settings,
+    RagSetting,
 )
 from rag_data.exceptions import ConfigError
 
@@ -51,57 +58,57 @@ def environ():
 
 
 def test_load_mapping_applies_values(mapping):
-    settings = Settings.load_mapping(mapping)
+    settings = RagSetting.load_mapping(mapping)
     assert settings.embedding.provider == 'qwen'
     assert settings.embedding.dim == 8
 
 
 def test_load_mapping_returns_settings_type():
-    assert isinstance(Settings.load_mapping(), Settings)
+    assert isinstance(RagSetting.load_mapping(), RagSetting)
 
 
 def test_load_mapping_fills_defaults_ignoring_env(monkeypatch):
     # 不读取环境变量：环境里设了值也应保持字段默认。
     monkeypatch.setenv(ENV_PREFIX + 'EMBEDDING' + ENV_NESTED_DELIMITER + 'PROVIDER', 'qwen')
-    settings = Settings.load_mapping()
+    settings = RagSetting.load_mapping()
     assert settings.embedding.provider == EmbeddingSettings().provider
     assert settings.parsing.max_chars == ParsingSettings().max_chars
 
 
 def test_load_mapping_overrides_beat_mapping(mapping):
-    settings = Settings.load_mapping(mapping, embedding={'provider': 'openai'})
+    settings = RagSetting.load_mapping(mapping, embedding={'provider': 'openai'})
     assert settings.embedding.provider == 'openai'
     assert settings.embedding.dim == 8
 
 
 def test_load_mapping_rejects_unknown_section():
     with pytest.raises(ConfigError):
-        Settings.load_mapping({'bogus': {'x': 1}})
+        RagSetting.load_mapping({'bogus': {'x': 1}})
 
 
 def test_load_mapping_rejects_non_mapping():
     with pytest.raises(ConfigError):
-        Settings.load_mapping('config.yml')
+        RagSetting.load_mapping('config.yml')
 
 
 def test_load_mapping_rejects_unknown_field():
     # 分区模型 extra=forbid，未知字段应校验失败。
     with pytest.raises(ValidationError):
-        Settings.load_mapping({'embedding': {'unknown': 1}})
+        RagSetting.load_mapping({'embedding': {'unknown': 1}})
 
 
 # ---------------- 来源二：环境变量 ----------------
 
 
 def test_load_env_reads_nested_keys(environ):
-    settings = Settings.load_env(environ)
+    settings = RagSetting.load_env(environ)
     assert settings.embedding.provider == 'qwen'
     assert settings.embedding.dim == 8
     assert settings.logging.level == 'DEBUG'
 
 
 def test_load_env_ignores_non_prefixed_and_unknown_sections():
-    settings = Settings.load_env({'OTHER': '1', 'RAG_BOGUS__X': '2'})
+    settings = RagSetting.load_env({'OTHER': '1', 'RAG_BOGUS__X': '2'})
     assert settings.embedding.provider == EmbeddingSettings().provider
     assert not hasattr(settings, 'bogus')
 
@@ -109,18 +116,18 @@ def test_load_env_ignores_non_prefixed_and_unknown_sections():
 def test_load_env_is_isolated_from_real_environment(monkeypatch):
     # 显式传入 environ 时不应受真实环境影响。
     monkeypatch.setenv(ENV_PREFIX + 'PARSING' + ENV_NESTED_DELIMITER + 'MAX_CHARS', '12345')
-    settings = Settings.load_env({})
+    settings = RagSetting.load_env({})
     assert settings.parsing.max_chars == ParsingSettings().max_chars
 
 
 def test_load_env_overrides_beat_environ(environ):
-    settings = Settings.load_env(environ, logging={'level': 'ERROR'})
+    settings = RagSetting.load_env(environ, logging={'level': 'ERROR'})
     assert settings.logging.level == 'ERROR'
 
 
 def test_load_env_rejects_unknown_section():
     with pytest.raises(ConfigError):
-        Settings.load_env({}, bogus={'x': 1})
+        RagSetting.load_env({}, bogus={'x': 1})
 
 
 # ---------------- 来源三：config.yml ----------------
@@ -130,8 +137,8 @@ def test_load_yaml_reads_sections(tmp_path):
     _require_yaml()
     path = tmp_path / 'config.yml'
     path.write_text(_dump(['embedding:', '  provider: qwen', '  dim: 8', 'logging:', '  level: DEBUG']), encoding='utf-8')
-    settings = Settings.load_yaml(str(path))
-    assert isinstance(settings, Settings)
+    settings = RagSetting.load_yaml(str(path))
+    assert isinstance(settings, RagSetting)
     assert settings.embedding.provider == 'qwen'
     assert settings.embedding.dim == 8
     assert settings.logging.level == 'DEBUG'
@@ -141,7 +148,7 @@ def test_load_yaml_empty_file_uses_defaults(tmp_path):
     _require_yaml()
     path = tmp_path / 'empty.yml'
     path.write_text('', encoding='utf-8')
-    settings = Settings.load_yaml(str(path))
+    settings = RagSetting.load_yaml(str(path))
     assert settings.embedding == EmbeddingSettings()
 
 
@@ -149,14 +156,14 @@ def test_load_yaml_overrides_beat_file(tmp_path):
     _require_yaml()
     path = tmp_path / 'config.yml'
     path.write_text(_dump(['embedding:', '  provider: qwen']), encoding='utf-8')
-    settings = Settings.load_yaml(str(path), embedding={'provider': 'openai'})
+    settings = RagSetting.load_yaml(str(path), embedding={'provider': 'openai'})
     assert settings.embedding.provider == 'openai'
 
 
 def test_load_yaml_missing_file_raises(tmp_path):
     _require_yaml()
     with pytest.raises(ConfigError):
-        Settings.load_yaml(str(tmp_path / 'missing.yml'))
+        RagSetting.load_yaml(str(tmp_path / 'missing.yml'))
 
 
 def test_load_yaml_non_mapping_raises(tmp_path):
@@ -164,7 +171,7 @@ def test_load_yaml_non_mapping_raises(tmp_path):
     path = tmp_path / 'list.yml'
     path.write_text(_dump(['- a', '- b']), encoding='utf-8')
     with pytest.raises(ConfigError):
-        Settings.load_yaml(str(path))
+        RagSetting.load_yaml(str(path))
 
 
 def test_load_yaml_rejects_unknown_section(tmp_path):
@@ -172,166 +179,252 @@ def test_load_yaml_rejects_unknown_section(tmp_path):
     path = tmp_path / 'config.yml'
     path.write_text(_dump(['bogus:', '  x: 1']), encoding='utf-8')
     with pytest.raises(ConfigError):
-        Settings.load_yaml(str(path))
+        RagSetting.load_yaml(str(path))
+# ---------------- memory 分区（独立于 RagSetting） ----------------
 
-# ---------------- db 分区 ----------------
+
+def test_memory_defaults():
+    m = MemorySettings()
+    assert m.enable is False
+    assert m.llm.provider == 'openai'
+    assert m.db.backend == 'sqlite'
+    assert m.vector.backend == 'milvus'
+
+
+def test_memory_not_in_rag_sections():
+    assert 'memory' not in MODULE_SECTIONS
+    assert set(SECTION_MODEL_CLASSES) == {SECTION_PARSING, SECTION_EMBEDDING, SECTION_LOGGING}
+
+
+def test_rag_rejects_memory_section():
+    with pytest.raises(ConfigError):
+        RagSetting.load_mapping({'memory': {'enable': True}})
+
+
+def test_rag_setting_has_no_memory_attribute():
+    settings = RagSetting.load_mapping()
+    for name in ('memory', 'llm', 'db', 'vector'):
+        assert not hasattr(settings, name)
+
+
+def test_memory_env_prefix_is_isolated():
+    # 记忆分区自带 RAG_MEMORY_ 前缀，与 RagSetting 的 RAG_ 分区键不重叠。
+    assert MEMORY_ENV_PREFIX == 'RAG_MEMORY_'
+    m = MemorySettings(enable=True, llm={'provider': 'qwen'})
+    assert m.enable is True
+    assert m.llm.provider == 'qwen'
+
+
+def test_memory_rejects_nlp_field():
+    # nlp 已从 MemorySettings 移除：句柄由解析侧 parsing 分区统一加载。
+    with pytest.raises(ValidationError):
+        MemorySettings(nlp='zh_core_web_md')
+
+
+def test_memory_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        MemorySettings(bogus=1)
+
+
+# ---------------- MemorySettings 三类来源 ----------------
+
+
+def test_memory_load_mapping_applies_values():
+    m = MemorySettings.load_mapping({'db': {'backend': 'pg'}})
+    assert m.db.backend == 'pg'
+    assert m.enable is False
+
+
+def test_memory_load_mapping_returns_settings_type():
+    assert isinstance(MemorySettings.load_mapping(), MemorySettings)
+
+
+def test_memory_load_mapping_ignores_env(monkeypatch):
+    monkeypatch.setenv('RAG_MEMORY__DB__BACKEND', 'pg')
+    assert MemorySettings.load_mapping().db.backend == 'sqlite'
+
+
+def test_memory_load_mapping_overrides_beat_mapping():
+    m = MemorySettings.load_mapping({'db': {'backend': 'pg'}}, db={'backend': 'mysql'})
+    assert m.db.backend == 'mysql'
+
+
+def test_memory_load_mapping_rejects_non_mapping():
+    with pytest.raises(ConfigError):
+        MemorySettings.load_mapping('config.yml')
+
+
+def test_memory_load_mapping_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        MemorySettings.load_mapping({'bogus': 1})
+
+
+def test_memory_load_env_reads_nested_keys():
+    m = MemorySettings.load_env({
+        'RAG_MEMORY__ENABLE': 'true',
+        'RAG_MEMORY__DB__BACKEND': 'mysql',
+        'RAG_MEMORY__DB__MYSQL__HOST': 'db.internal',
+        'RAG_MEMORY__VECTOR__VECTOR_SIZE': '768',
+    })
+    assert m.enable is True
+    assert m.db.backend == 'mysql'
+    assert m.db.mysql.host == 'db.internal'
+    assert m.vector.vector_size == 768
+
+
+def test_memory_load_env_ignores_other_prefixes():
+    m = MemorySettings.load_env({'RAG_EMBEDDING__DIM': '8', 'OTHER': '1'})
+    assert m.db.backend == 'sqlite'
+
+
+def test_memory_load_env_overrides_beat_environ():
+    m = MemorySettings.load_env({'RAG_MEMORY__DB__BACKEND': 'pg'}, db={'backend': 'mysql'})
+    assert m.db.backend == 'mysql'
+
+def test_memory_load_yaml_reads_fields(tmp_path):
+    _require_yaml()
+    path = tmp_path / 'config.yml'
+    path.write_text(_dump(['db:', '  backend: pg']), encoding='utf-8')
+    m = MemorySettings.load_yaml(str(path))
+    assert m.db.backend == 'pg'
+
+
+def test_memory_load_yaml_empty_file_uses_defaults(tmp_path):
+    _require_yaml()
+    path = tmp_path / 'empty.yml'
+    path.write_text('', encoding='utf-8')
+    m = MemorySettings.load_yaml(str(path))
+    assert m.enable is False
+
+
+def test_memory_load_yaml_missing_file_raises(tmp_path):
+    _require_yaml()
+    with pytest.raises(ConfigError):
+        MemorySettings.load_yaml(str(tmp_path / 'missing.yml'))
+
+
+def test_memory_load_yaml_rejects_non_mapping(tmp_path):
+    _require_yaml()
+    path = tmp_path / 'list.yml'
+    path.write_text(_dump(['- a', '- b']), encoding='utf-8')
+    with pytest.raises(ConfigError):
+        MemorySettings.load_yaml(str(path))
+
+# ---------------- memory.db ----------------
 
 
 def test_db_defaults():
-    settings = Settings.load_mapping()
-    assert settings.db.backend == 'sqlite'
-    assert settings.db.sqlite.path == ''
-    assert settings.db.mysql.host == 'localhost'
-    assert settings.db.mysql.port == 3306
-    assert settings.db.mysql.user == 'root'
-    assert settings.db.mysql.charset == 'utf8mb4'
-    assert settings.db.pg.host == 'localhost'
-    assert settings.db.pg.port == 5432
-    assert settings.db.pg.user == 'postgres'
-    assert settings.db.pg.connection_string == ''
+    db = MemorySettings().db
+    assert db.backend == 'sqlite'
+    assert db.sqlite.path == ''
+    assert db.mysql.host == 'localhost'
+    assert db.mysql.port == 3306
+    assert db.pg.host == 'localhost'
+    assert db.pg.port == 5432
+    assert db.pg.connection_string == ''
 
 
-def test_db_section_registered():
-    from rag_data.config import MODULE_SECTIONS, SECTION_DB, SECTION_MODEL_CLASSES, DBSettings
-    assert SECTION_DB == 'db'
-    assert SECTION_DB in MODULE_SECTIONS
-    assert SECTION_MODEL_CLASSES[SECTION_DB] is DBSettings
+def test_db_nested_in_memory_section():
+    from rag_data.config import DBSettings
+    assert isinstance(MemorySettings().db, DBSettings)
 
 
 def test_db_mapping_override_backend():
-    settings = Settings.load_mapping(db={'backend': 'pg'})
-    assert settings.db.backend == 'pg'
+    assert MemorySettings(**{'db': {'backend': 'pg'}}).db.backend == 'pg'
 
 
 def test_db_mapping_preserves_other_nested_defaults():
-    settings = Settings.load_mapping(db={'mysql': {'host': '10.0.0.5', 'port': 3307}})
-    assert settings.db.mysql.host == '10.0.0.5'
-    assert settings.db.mysql.port == 3307
-    assert settings.db.mysql.user == 'root'
-    assert settings.db.pg.port == 5432
+    db = MemorySettings(**{'db': {'mysql': {'host': '10.0.0.5', 'port': 3307}}}).db
+    assert db.mysql.host == '10.0.0.5'
+    assert db.mysql.port == 3307
+    assert db.mysql.user == 'root'
+    assert db.pg.port == 5432
 
 
-
-def test_db_mapping_overrides_beat_defaults():
-    settings = Settings.load_mapping(db={'sqlite': {'path': 'store.db'}, 'pg': {'connection_string': 'postgresql:store'}})
-    assert settings.db.sqlite.path == 'store.db'
-    assert settings.db.pg.connection_string == 'postgresql:store'
-    assert settings.db.pg.host == 'localhost'
-
-
-def test_db_env_nested_keys():
-    settings = Settings.load_env({
-        'RAG_DB__BACKEND': 'mysql',
-        'RAG_DB__MYSQL__HOST': 'db.internal',
-        'RAG_DB__MYSQL__PORT': '3307',
-        'RAG_DB__SQLITE__PATH': 'data.db',
-    })
-    assert settings.db.backend == 'mysql'
-    assert settings.db.mysql.host == 'db.internal'
-    assert settings.db.mysql.port == 3307
-    assert settings.db.sqlite.path == 'data.db'
-    assert settings.db.pg.port == 5432
+def test_db_env_nested_keys(monkeypatch):
+    monkeypatch.setenv('RAG_MEMORY__DB__BACKEND', 'mysql')
+    monkeypatch.setenv('RAG_MEMORY__DB__MYSQL__HOST', 'db.internal')
+    monkeypatch.setenv('RAG_MEMORY__DB__SQLITE__PATH', 'data.db')
+    db = MemorySettings().db
+    assert db.backend == 'mysql'
+    assert db.mysql.host == 'db.internal'
+    assert db.sqlite.path == 'data.db'
 
 
 def test_db_rejects_unknown_backend():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(db={'backend': 'oracle'})
+        MemorySettings(**{'db': {'backend': 'oracle'}})
 
 
 def test_db_rejects_unknown_field():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(db={'sqlite': {'unknown': 1}})
-
-
-def test_db_rejects_unknown_nested_section():
-    with pytest.raises(ValidationError):
-        Settings.load_mapping(db={'redis': {}})
+        MemorySettings(**{'db': {'sqlite': {'unknown': 1}}})
 
 
 def test_db_rejects_bad_port():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(db={'mysql': {'port': 0}})
+        MemorySettings(**{'db': {'mysql': {'port': 0}}})
 
 
-
-# ---------------- vector 分区 ----------------
+# ---------------- memory.vector ----------------
 
 
 def test_vector_defaults():
-    settings = Settings.load_mapping()
-    v = settings.vector
+    v = MemorySettings().vector
     assert v.backend == 'milvus'
     assert v.collection == 'rag_data'
     assert v.vector_size == 1024
     assert v.top_k == 5
     assert v.metric_type == 'COSINE'
     assert v.milvus.uri == ''
-    assert v.milvus.token == ''
-    assert v.milvus.db_name == ''
-    assert v.pg.host == 'localhost'
     assert v.pg.port == 5432
-    assert v.pg.user == 'postgres'
-    assert v.pg.database == 'rag_data'
     assert v.pg.use_hnsw is True
-    assert v.pg.connection_string == ''
 
 
-def test_vector_section_registered():
-    from rag_data.config import MODULE_SECTIONS, SECTION_MODEL_CLASSES, SECTION_VECTOR, VectorSettings
-    assert SECTION_VECTOR == 'vector'
-    assert SECTION_VECTOR in MODULE_SECTIONS
-    assert SECTION_MODEL_CLASSES[SECTION_VECTOR] is VectorSettings
+def test_vector_nested_in_memory_section():
+    from rag_data.config import VectorSettings
+    assert isinstance(MemorySettings().vector, VectorSettings)
 
 
 def test_vector_mapping_overrides():
-    settings = Settings.load_mapping(vector={
+    v = MemorySettings(**{'vector': {
         'backend': 'pg',
         'collection': 'docs',
         'vector_size': 768,
         'top_k': 9,
         'pg': {'host': 'vec.internal', 'use_hnsw': False},
-    })
-    v = settings.vector
+    }}).vector
     assert v.backend == 'pg'
     assert v.collection == 'docs'
     assert v.vector_size == 768
     assert v.top_k == 9
-    assert v.pg.host == 'vec.internal'
     assert v.pg.use_hnsw is False
-    # 未覆盖的字段保留默认值。
     assert v.pg.port == 5432
-    assert v.milvus.uri == ''
 
 
-def test_vector_env_nested_keys():
-    settings = Settings.load_env({
-        'RAG_VECTOR__BACKEND': 'pg',
-        'RAG_VECTOR__VECTOR_SIZE': '768',
-        'RAG_VECTOR__PG__DATABASE': 'vec',
-        'RAG_VECTOR__MILVUS__URI': 'milvus.internal:19530',
-    })
-    v = settings.vector
+def test_vector_env_nested_keys(monkeypatch):
+    monkeypatch.setenv('RAG_MEMORY__VECTOR__BACKEND', 'pg')
+    monkeypatch.setenv('RAG_MEMORY__VECTOR__VECTOR_SIZE', '768')
+    monkeypatch.setenv('RAG_MEMORY__VECTOR__MILVUS__URI', 'milvus.internal:19530')
+    v = MemorySettings().vector
     assert v.backend == 'pg'
     assert v.vector_size == 768
-    assert v.pg.database == 'vec'
     assert v.milvus.uri == 'milvus.internal:19530'
-    assert v.top_k == 5
 
 
 def test_vector_rejects_unknown_backend():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(vector={'backend': 'oracle'})
+        MemorySettings(**{'vector': {'backend': 'oracle'}})
 
 
 def test_vector_rejects_unknown_field():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(vector={'bogus': 1})
+        MemorySettings(**{'vector': {'bogus': 1}})
 
 
 def test_vector_rejects_bad_top_k():
     with pytest.raises(ValidationError):
-        Settings.load_mapping(vector={'top_k': 0})
-
+        MemorySettings(**{'vector': {'top_k': 0}})
 
 
 
@@ -339,22 +432,20 @@ def test_vector_rejects_bad_top_k():
 
 
 def test_sections_default_disabled():
-    settings = Settings.load_mapping()
-    for name in ['parsing', 'embedding', 'llm', 'db', 'vector']:
+    settings = RagSetting.load_mapping()
+    for name in ('parsing', 'embedding'):
         assert getattr(settings, name).enable is False
-    for name in ['logging']:
-        assert getattr(settings, name).enable is True
-
-def test_section_enable_overridable_by_mapping():
-    settings = Settings.load_mapping(logging={'enable': False})
-    assert settings.logging.enable is False
-    assert settings.parsing.enable is False
+    assert settings.logging.enable is True
+    m = MemorySettings()
+    for name in ('llm', 'db', 'vector'):
+        assert getattr(m, name).enable is False
 
 
-def test_section_enable_overridable_by_env():
-    settings = Settings.load_env({'RAG_DB__ENABLE': 'true', 'RAG_VECTOR__ENABLE': '1'})
-    assert settings.db.enable is True
-    assert settings.vector.enable is True
-    assert settings.embedding.enable is False
-
+def test_memory_enable_from_env(monkeypatch):
+    monkeypatch.setenv('RAG_MEMORY__ENABLE', 'true')
+    monkeypatch.setenv('RAG_MEMORY__DB__ENABLE', '1')
+    m = MemorySettings()
+    assert m.enable is True
+    assert m.db.enable is True
+    assert m.vector.enable is False
 

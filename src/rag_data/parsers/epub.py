@@ -6,7 +6,8 @@ from typing import Any, List, Optional, Tuple
 
 from rag_data.exceptions import ParseError, ParserDependencyError
 from rag_data.logging.base import LoggerAdapter
-from rag_data.parsers.base import DEFAULT_MODEL, DocumentParser, load_nlp
+from rag_data.nlp.spacy import DEFAULT_MODEL, load_nlp
+from rag_data.parsers.base import DocumentParser
 
 PACKAGES = "ebooklib 与 beautifulsoup4"
 INSTALL_HINT = "pip install -e '.[epub]'"

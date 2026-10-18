@@ -15,16 +15,16 @@
 - 关系库：SQLite、MySQL、PostgreSQL（基于 SQLAlchemy Core），雪花 ID 主键，启动时检查并按需建表
 - 向量库：Milvus（单一 BM25 schema）与 PostgreSQL（pgvector，HNSW 或 DiskANN 加 GIN 索引）；VectorEngine 统一读写调用
 - 五个注册表均为纯注册表：只登记实现类，实例化在各自的 handler 或 engine 中进行
-- 包根只导出当前目录直接模块的公共符号（共 23 个）；子包按模块路径取用
+- 包根只导出当前目录直接模块的公共符号（共 24 个）；子包按模块路径取用
 
 ## 快速开始
 
 ```python
-from rag_data.config import Settings
+from rag_data.config import RagSetting
 from rag_data.facade import RagData
 
 # 各分区默认关闭：未启用的组件为 None，不做初始化
-app = RagData(Settings.load_mapping(
+app = RagData(RagSetting.load_mapping(
     parsing={'enable': True},
     embedding={'enable': True},
 ))
@@ -35,17 +35,17 @@ vectors = app.embedder.encode(chunks)         # 文本到稠密向量
 
 ## 包根导出
 
-包根 __init__.py 只导出当前目录（直接模块）的公共符号，共 23 个，不含子包与子目录内容：
+包根 __init__.py 只导出当前目录（直接模块）的公共符号，共 25 个，不含子包与子目录内容：
 
 | 分组 | 符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | Settings、ParsingSettings、EmbeddingSettings、LoggingSettings、LLMSettings、ENV_PREFIX、ENV_NESTED_DELIMITER、SECTION_PARSING、SECTION_EMBEDDING、SECTION_LOGGING、SECTION_LLM |
+| 配置 | RagSetting、ParsingSettings、EmbeddingSettings、LoggingSettings、LLMSettings、MemorySettings、ENV_PREFIX、MEMORY_ENV_PREFIX、ENV_NESTED_DELIMITER、SECTION_PARSING、SECTION_EMBEDDING、SECTION_LOGGING |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError、LLMError |
 | 通用设施 | Registry、Ref |
-| 流程门面 | RagData |
+| 流程门面 | RagData、MemoryServer |
 
-未纳入包根导出的符号按模块路径取用：SECTION_DB 与 SECTION_VECTOR（config）、DBSettings 与 VectorSettings（config）、StorageError（exceptions）。
+未纳入包根导出的符号按模块路径取用：DBSettings、VectorSettings（config），StorageError（exceptions）。
 
 子包不参与包根导出，按模块路径取用：
 
@@ -66,20 +66,31 @@ config.py 按分区定义嵌套模型，提供三类来源的加载方法。
 
 | 方法 | 来源 | 是否读环境变量 |
 | :--- | :--- | :--- |
-| Settings.load_mapping(source=None, **overrides) | JSON 对象（分区字典） | 否 |
-| Settings.load_env(environ=None, **overrides) | 环境变量 | 是（可显式传 environ） |
-| Settings.load_yaml(path, **overrides) | config.yml 文件 | 否（惰性导入 PyYAML） |
+| RagSetting.load_mapping(source=None, **overrides) | JSON 对象（分区字典） | 否 |
+| RagSetting.load_env(environ=None, **overrides) | 环境变量 | 是（可显式传 environ） |
+| RagSetting.load_yaml(path, **overrides) | config.yml 文件 | 否（惰性导入 PyYAML） |
+| MemorySettings.load_mapping(source=None, **overrides) | JSON 对象（memory 字段字典） | 否 |
+| MemorySettings.load_env(environ=None, **overrides) | 环境变量（RAG_MEMORY_ 前缀） | 是（可显式传 environ） |
+| MemorySettings.load_yaml(path, **overrides) | config.yml 文件 | 否（惰性导入 PyYAML） |
 
-优先级：overrides 高于来源数据，来源数据高于分区默认值；三类方法均以分区为单位逐字段合并。
+优先级：overrides 高于来源数据，来源数据高于字段默认值；三类方法均以字段为单位合并。MemorySettings 的 load_mapping／load_yaml 会先补齐字段默认值，因此不读取环境变量；只有 load_env 与直接构造会读 RAG_MEMORY_ 变量，两者共用同一套解析，兼容 RAG_MEMORY__DB__BACKEND 与 RAG_MEMORY_DB__BACKEND 两种写法；记忆侧不读 .env，需要文件来源时用 load_yaml。
 
 ```python
-from rag_data.config import Settings
+from rag_data.config import RagSetting
 
-settings = Settings()                            # 读 RAG_ 环境变量与 .env
-settings = Settings.load_env()                   # 显式按环境变量加载
-settings = Settings.load_mapping({'embedding': {'provider': 'qwen'}})
-settings = Settings.load_mapping(embedding={'dim': 1024}, parsing={'max_chars': 180})
-settings = Settings.load_yaml('config.yml')
+settings = RagSetting()                            # 读 RAG_ 环境变量与 .env
+settings = RagSetting.load_env()                   # 显式按环境变量加载
+settings = RagSetting.load_mapping({'embedding': {'provider': 'qwen'}})
+settings = RagSetting.load_mapping(embedding={'dim': 1024}, parsing={'max_chars': 180})
+settings = RagSetting.load_yaml('config.yml')
+```
+
+```python
+from rag_data.config import MemorySettings
+
+memory = MemorySettings.load_mapping({'db': {'backend': 'pg'}})
+memory = MemorySettings.load_env()                 # 读 RAG_MEMORY_ 前缀
+memory = MemorySettings.load_yaml('memory.yml')     # 内容为 memory 字段的映射
 ```
 
 ### 环境变量
@@ -90,9 +101,12 @@ settings = Settings.load_yaml('config.yml')
 RAG_EMBEDDING__PROVIDER=qwen
 RAG_EMBEDDING__DIM=1024
 RAG_LOGGING__LEVEL=DEBUG
-RAG_DB__ENABLE=true
-RAG_VECTOR__BACKEND=pg
-RAG_VECTOR__PG__DATABASE=rag_data
+
+# 记忆分区独立装配，前缀固定为 RAG_MEMORY_
+RAG_MEMORY__ENABLE=true
+RAG_MEMORY__DB__ENABLE=true
+RAG_MEMORY__VECTOR__BACKEND=pg
+RAG_MEMORY__VECTOR__PG__DATABASE=rag_data
 ```
 
 分区名写错会抛 ConfigError，并列出可用分区。
@@ -104,10 +118,10 @@ RAG_VECTOR__PG__DATABASE=rag_data
 | parsing | enable(false)、spacy_model(zh_core_web_sm)、max_chars(500)、safe_max_chars(2000) |
 | embedding | enable(false)、provider(openai)、model(空)、batch_size(128)、dim(1024)、api_key(空)、base_url(空)、timeout(60.0) |
 | logging | enable(true)、backend(stdliblog)、level(INFO)、format(空，读 pyproject)、timezone(空，系统本地) |
-| llm | enable(false)、provider(openai)、model(空)、temperature(0.7)、max_tokens(0)、api_key(空)、base_url(空)、timeout(60.0) |
-| db | enable(false)、backend(sqlite)、sqlite.path(空)、mysql(host、port、user、password、database、charset)、pg(host、port、user、password、database、connection_string) |
-| vector | enable(false)、backend(milvus)、collection(rag_data)、vector_size(1024)、top_k(5)、metric_type(COSINE)、milvus(uri、token、db_name)、pg(connection_string、host、port、user、password、database、use_hnsw、use_diskann) |
+| memory（独立） | enable(false)、llm、db、vector；各子分区沿用自身字段与默认值 |
 
+
+RagSetting 只含 parsing、embedding、logging 三个分区；MemorySettings 独立构造（前缀 RAG_MEMORY_），自带 llm、db、vector，不再出现在 RagSetting 中。
 enable 语义：分区开关；除 logging 默认开启外，其余默认关闭。关闭时门面不初始化对应组件（实例为 None），可避免不必要的依赖与连接。
 
 维度一致性：embedding.dim 声明期望输出维度（默认 1024），EmbedderHandler 据此校验每条向量，不一致抛 EmbeddingError。
@@ -128,7 +142,9 @@ parsers 子包按扩展名把解析与切块派发到对应 DocumentParser 子�
 | :--- | :--- | :--- |
 | registry_parser.py | BUILTIN_PARSERS、register_parser、resolve_parser_class | 纯注册表，只登记实现类，不实例化 |
 | parser_handler.py | ParserHandler、PARSER_CLASSES | 按扩展名派发；构造时预实例化全部解析器并复用 |
-| base.py | DocumentParser、load_nlp | 抽象基类（SUFFIXES、backend 与 parse、chunk 契约）与 spaCy 句柄加载 |
+| base.py | DocumentParser | 抽象基类：SUFFIXES、backend 与 parse、chunk 契约，以及递归切块与重叠前缀 |
+| nlp/spacy.py | DEFAULT_MODEL、load_nlp、clear_cache、ensure_sentence_boundaries | spaCy 句柄加载：惰性导入、按模型名缓存、失败也缓存 |
+| nlp/__init__.py | 汇总导出上述四个符号 | 供 parsers 与门面共用 |
 | txt.py | TxtParser | .txt，整篇递归切块 |
 | markdown.py | MarkdownParser | .md、.markdown，按行首井号分章后递归切块 |
 | epub.py | EpubParser | .epub，按 spine 提取章节（排除目录页）后按井号分章递归切块 |
@@ -434,23 +450,23 @@ logger = LoggerFactory.get_logger()
 facade.py 提供 RagData：一次装配各分区组件，随后按流程调用。
 
 ```python
-from rag_data.config import Settings
+from rag_data.config import RagSetting
 from rag_data.facade import RagData
 
 # 仅启用解析与向量化；未启用的分区实例为 None
-app = RagData(Settings.load_mapping(
+app = RagData(RagSetting.load_mapping(
     parsing={'enable': True},
     embedding={'enable': True},
 ))
 app.parser        # 解析器始终装配，固定为 ParserHandler 实例
-app.embedder      # 已装配；logger、nlp、db、vector 则为 None
+app.embedder      # 已装配；db、vector、llm 交由 MemoryServer 装配
 text = app.parse_document('a.md')
 chunks = app.chunk_document('a.md', text)
 ```
 
 | 成员 | 说明 |
 | :--- | :--- |
-| settings、parser、logger、nlp、embedder、db、vector | 构造后挂载的实例变量；未启用的分区为 None |
+| settings、parser、logger、nlp、embedder | 构造后挂载的实例变量；未启用的分区为 None |
 | parser_handler（属性） | 解析派发入口，返回 ParserHandler 实例 |
 | parse_document(path) | 委托 parser 解析单文件为纯文本 |
 | chunk_document(path, text) | 委托 parser 切块，长度取自 parsing 分区 |
@@ -464,8 +480,11 @@ chunks = app.chunk_document('a.md', text)
 | _build_embedder(embedding_settings, logger, model=None) | 装配向量化组件；embedding.enable 为 False 时返回 None |
 | _build_db(db_settings, logger) | 按 db.backend 装配关系库；db.enable 为 False 时返回 None |
 | _build_vector(vector_settings, logger) | 按 vector.backend 装配向量引擎；vector.enable 为 False 时返回 None |
+| _build_llm(llm_settings, logger, model=None) | 装配大模型入口；llm.enable 为 False 时返回 None |
+| _build_memory(memory_settings, logger, embedder, llm, db, vector) | 装配 MemoryHandler；memory.enable 为 False 时返回 None |
 
-facade 的 __all__ 仅含 RagData。
+RagData 只装配 logging、parsing、embedding；MemoryServer 接收独立的 MemorySettings，装配 logger 与 memory 下的 db、vector、llm，并持有 MemoryHandler；embedder 需由调用方注入。facade 的 __all__ 含 RagData 与 MemoryServer。
+
 
 ## 目录结构
 
@@ -532,6 +551,6 @@ pytest --integration -m integration -v -s   # 跑集成用例（需真实服务�
 - 解析细化：PDF 双栏、Word 表格等版面级处理
 - 向量化：兼容本地模型（如 sentence-transformers）的 embedder（已有 embedding extra，尚未实现后端）
 - 数据保存：向量落库流程与 facade 对 vector、db、llm 的装配编排
-- 依赖声明：Settings.load_yaml 需要 PyYAML，pyproject.toml 尚未声明，建议补充依赖或新增 yaml extra
+- 依赖声明：RagSetting.load_yaml 需要 PyYAML，pyproject.toml 尚未声明，建议补充依赖或新增 yaml extra
 - openai extra 当前锁定为 openai==3.26.0，建议核对版本是否存在并按需放宽
 

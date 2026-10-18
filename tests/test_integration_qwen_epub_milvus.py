@@ -33,7 +33,7 @@ from openai import OpenAI
 
 import pytest
 
-from rag_data import RagData, Settings
+from rag_data import RagData, RagSetting
 
 # 凭据与连接信息一律来自运行时环境变量，代码中不写默认密钥。
 MILVUS_URI = os.environ.get('RAG_IT_MILVUS_URI', 'http://127.0.0.1:19530')
@@ -100,9 +100,9 @@ if "--integration" not in sys.argv:
 
 
 @pytest.fixture(scope='module')
-def it_settings() -> Settings:
+def it_settings() -> RagSetting:
     # 按集成测试需要构造配置：qwen 嵌入；凭据与模型来自环境变量。
-    return Settings.load_mapping(
+    return RagSetting.load_mapping(
         parsing={
             'enable': True,
             'spacy_model': SPACY_MODEL,

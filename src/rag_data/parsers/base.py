@@ -1,24 +1,17 @@
 # 文档解析器基类：一种格式一个子类，parse 与 chunk 均由子类实现。
 #
-# 句柄：未装 spaCy 或模型缺失时返回 None，由调用方降级（标点回退）；
-# 成功与失败都缓存，避免逐次重试拖慢批量导入，环境修复后 clear_cache() 可重建。
+# 句柄加载已抽到 rag_data.nlp.spacy，此处按旧路径再导出，保证既有引用可用。
 #
 # nlp 约定：由装配层（facade）加载后逐级注入；子类只消费注入的句柄，nlp 为 None 时按各子类规则处理。
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Union
+from typing import Any, ClassVar, FrozenSet, List, Optional
 
 from rag_data.logging.base import LoggerAdapter
+from rag_data.nlp.spacy import DEFAULT_MODEL, clear_cache, load_nlp
 from rag_data.parsers.registry_parser import register_parser
-
-DEFAULT_MODEL = "zh_core_web_md"
-
-# 失败哨兵：与「尚未加载」区分，避免每次调用都重复尝试加载。
-_FAILED = object()
-_PIPELINES: Dict[str, Any] = {}
 
 
 class DocumentParser(ABC):
@@ -61,48 +54,6 @@ class DocumentParser(ABC):
         """读取 UTF-8 文本，供无结构格式共用。"""
         with open(path, "r", encoding="utf-8") as stream:
             return stream.read()
-
-    # ---------------- 句柄加载 ----------------
-
-    @classmethod
-    def load_nlp(cls, model_name: str = DEFAULT_MODEL, logger: Optional[LoggerAdapter] = None) -> Optional[Any]:
-        """加载 spaCy 句柄：补齐 sentencizer 以支持句级切分，保留 ner 供实体抽取。"""
-        cached = _PIPELINES.get(model_name)
-        if cached is _FAILED:
-            return None
-        if cached is not None:
-            return cached
-        try:
-            import spacy
-        except ImportError:
-            _PIPELINES[model_name] = _FAILED
-            if logger is not None:
-                logger.warning("spaCy 未安装，分句与实体抽取将使用回退实现", model=model_name)
-            return None
-        try:
-            nlp = spacy.load(model_name,disable=["tagger", "ner", "attribute_ruler"])
-        except Exception as exc:  # noqa: BLE001 模型缺失或加载失败均降级
-            _PIPELINES[model_name] = _FAILED
-            if logger is not None:
-                logger.warning("spaCy 模型加载失败，将使用回退实现", model=model_name, error=str(exc))
-            return None
-        cls._ensure_sentence_boundaries(nlp)
-        _PIPELINES[model_name] = nlp
-        if logger is not None:
-            logger.info("spaCy 模型加载完成", model=model_name, pipes=list(nlp.pipe_names))
-        return nlp
-
-    @classmethod
-    def clear_cache(cls) -> None:
-        """清空句柄缓存（含失败记录），供测试或运行时重建句柄使用。"""
-        _PIPELINES.clear()
-
-    @staticmethod
-    def _ensure_sentence_boundaries(nlp: Any) -> None:
-        """句级切分依赖 parser 或 sentencizer；两者都缺时补一个 sentencizer。"""
-        names = list(getattr(nlp, "pipe_names", None) or [])
-        if "parser" not in names and "sentencizer" not in names:
-            nlp.add_pipe("sentencizer")
 
     def split_sentences(self, text: str, nlp: Any = None) -> List[str]:
         """使用 spaCy 进行中英文及复杂缩写的精确分句，并按换行符二次切分。"""
@@ -243,7 +194,3 @@ class DocumentParser(ABC):
         )
 
         return [current_chunk_text] + rest_chunks
-
-# 模块级入口：实体抽取、流程门面等非解析器模块直接复用句柄加载。
-load_nlp = DocumentParser.load_nlp
-clear_cache = DocumentParser.clear_cache

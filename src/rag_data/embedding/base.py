@@ -10,7 +10,7 @@ from rag_data.embedding.registry_embedder import register_embedder
 from rag_data.exceptions import EmbeddingError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import Settings, EmbeddingSettings
+    from rag_data.config import EmbeddingSettings
     from rag_data.logging.base import LoggerAdapter
 
 
