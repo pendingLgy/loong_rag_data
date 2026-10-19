@@ -391,9 +391,9 @@ build_vector_engine → VectorEngine → VectorStoreBase
 ```python
 from rag_data.storage.vector_store.pg_store import table_ddl, hnsw_index_ddl, text_index_ddl
 
-print(table_ddl('rag_data_it_vector', 8))
-print(hnsw_index_ddl('rag_data_it_vector'))
-print(text_index_ddl('rag_data_it_vector'))
+print(table_ddl('autotest_vector', 8))
+print(hnsw_index_ddl('autotest_vector'))
+print(text_index_ddl('autotest_vector'))
 ```
 
 ### VectorEngine
@@ -523,7 +523,9 @@ src/rag_data/storage/vector_store
 tests
 - conftest.py                            路径注入、公共夹器与 --integration 选项
 - test_config.py                         配置三类来源与各分区
-- test_facade.py                         装配方法与 RagData 构造、门控
+- test_facade.py                         装配方法与 facade 公开契约
+- test_facade_ragdata.py                 RagData 构造、解析与切块
+- test_facade_memoryserver.py            MemoryServer 装配与流程代理
 - test_parsers_base.py                   切分、重叠前缀与递归切块
 - test_parsers_dispatch.py               派发与解析器注册表
 - test_parsers_txt.py 等                各格式解析与切块
@@ -531,17 +533,18 @@ tests
 - test_db.py                             关系库注册表、表结构、SQLite 端到端
 - test_vector_store.py                   向量库注册表、DDL、引擎，以及真实服务集成
 - test_integration_qwen_epub_milvus.py  真实 EPUB 到 Milvus 的端到端链路
+- test_integration_facade_ragdata.py  RagData 集成：真实解析与切块
+- test_integration_facade_memoryserver.py  MemoryServer 集成：四条流程
 ```
 
-规模：383 项（单元 240、集成 143）。集成用例分布在 test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py；默认由 addopts 的 -m not integration 反选，且这三个文件在模块级检查 --integration 参数，未提供时整体跳过并打印 [SKIP INFO]。
+规模：402 项（单元 237、集成 165）。集成用例分布在 test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py、test_integration_facade_ragdata.py、test_integration_facade_memoryserver.py；默认由 addopts 的 -m not integration 反选，且这五个文件在模块级检查 --integration 参数，未提供时整体跳过并打印 [SKIP INFO]；测试用库名、集合名与表名统一以 autotest_ 开头，删除动作只在该前缀下执行。
 
 ```bash
 pytest -rs                       # 只跑单元用例，末尾附跳过清单
 pytest --integration -m integration -v -s   # 跑集成用例（需真实服务与凭据）
 ```
 
-跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常。与本机示例文件相关的环境变量：RAG_TEST_TXT、RAG_TEST_MD、RAG_TEST_PDF、RAG_TEST_DOCX、RAG_TEST_EPUB。
-
+跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常。集成测试的连接信息、密钥、后端选择与样例路径统一写在测试目录下的 conftest.py（顶部的各分区 JSON 变量），用例不再读取环境变量；各分区 JSON 会实例化为 EmbeddingSettings、LLMSettings、ParsingSettings 与各存储 Settings 对象，供用例直接读属性。
 ## 待实现（TODO）
 
 - 解析细化：PDF 双栏、Word 表格等版面级处理

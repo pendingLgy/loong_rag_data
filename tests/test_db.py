@@ -3,10 +3,11 @@
 # 单元用例不依赖外部服务：SQLite 用临时文件，缺库分支只校验报错类型。
 # 缺驱动或无服务时按服务名与目标地址跳过，可用 pytest -rs 查看跳过清单。
 
-import os
 import sys
 
 import pytest
+
+from conftest import MYSQL_SETTINGS, PG_SETTINGS
 
 from rag_data.config import DBSettings, MySQLSettings, PGSettings, SQLiteSettings
 from rag_data.exceptions import ConfigError, OptionalDependencyError
@@ -527,22 +528,23 @@ def test_pg_constructor_is_lazy_or_connects():
 
 # ---------------- 集成：MySQL 与 PG（默认跳过） ----------------
 #
-# 运行前设置环境变量并显式指定集成标记：
-#   set RAG_IT_MYSQL_USER=root
-#   set RAG_IT_MYSQL_PASSWORD=secret
-#   set RAG_IT_PG_PASSWORD=secret
+# 使用前在 conftest 的 mysql 与 pg 分组里填好连接信息，再显式指定集成标记：
+#   python -m pytest --integration -m integration -v
+#
+# 库名默认以 autotest_ 开头（autotest_rag_data），需提前在 MySQL 与 PG 中建好该库；
+# 用例只重置表，不删除库。
 
-MYSQL_HOST = os.environ.get('RAG_IT_MYSQL_HOST', '127.0.0.1')
-MYSQL_PORT = int(os.environ.get('RAG_IT_MYSQL_PORT', '3306'))
-MYSQL_USER = os.environ.get('RAG_IT_MYSQL_USER', 'root')
-MYSQL_PASSWORD = os.environ.get('RAG_IT_MYSQL_PASSWORD', '123456')
-MYSQL_DB = os.environ.get('RAG_IT_MYSQL_DB', 'rag_data_it')
+MYSQL_HOST = MYSQL_SETTINGS.host
+MYSQL_PORT = MYSQL_SETTINGS.port
+MYSQL_USER = MYSQL_SETTINGS.user
+MYSQL_PASSWORD = MYSQL_SETTINGS.password
+MYSQL_DB = MYSQL_SETTINGS.database
 
-PG_HOST = os.environ.get('RAG_IT_PG_HOST', '127.0.0.1')
-PG_PORT = int(os.environ.get('RAG_IT_PG_PORT', '5432'))
-PG_USER = os.environ.get('RAG_IT_PG_USER', 'root')
-PG_PASSWORD = os.environ.get('RAG_IT_PG_PASSWORD', '123456')
-PG_DB = os.environ.get('RAG_IT_PG_DB', 'rag_data_it')
+PG_HOST = PG_SETTINGS.host
+PG_PORT = PG_SETTINGS.port
+PG_USER = PG_SETTINGS.user
+PG_PASSWORD = PG_SETTINGS.password
+PG_DB = PG_SETTINGS.database
 
 
 def _skip_service(service: str, target: str, exc: Exception) -> None:

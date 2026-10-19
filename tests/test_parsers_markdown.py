@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from conftest import SAMPLES_CONFIG
+
 from rag_data.exceptions import ParserDependencyError
 from rag_data.parsers.base import DocumentParser, load_nlp, DEFAULT_MODEL
 from rag_data.parsers.markdown import MarkdownParser
@@ -115,24 +117,14 @@ def test_chunk_splits_complex_chinese_markdown():
 
 
 def _local_md():
-    "返回本机可用于冒烟的 markdown 路径；不可用则返回空串。"
-    override = os.environ.get("RAG_TEST_MD","F:\\workspace\\code\\python\\rag-data\\.vcl\\struct.md")
-    if override:
-        return override
-    workspace = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md")
-    if os.path.exists(workspace):
-        return workspace
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if not os.path.isdir(desktop):
-        return ""
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith((".md", ".markdown")))
-    return os.path.join(desktop, files[0]) if files else ""
+    # 样例路径来自 conftest 的 SAMPLES_CONFIG
+    return SAMPLES_CONFIG["md"]
 
 
 _LOCAL_MD = _local_md()
 
 
-@pytest.mark.skipif(not _LOCAL_MD or not os.path.exists(_LOCAL_MD), reason="本机示例 markdown 不存在：请设置 RAG_TEST_MD，或把 .md 放到桌面")
+@pytest.mark.skipif(not _LOCAL_MD or not os.path.exists(_LOCAL_MD), reason="本机示例 markdown 不存在：请设置 samples.md，或把 .md 放到桌面")
 def test_local_md_parse_then_chunk():
     parser = MarkdownParser(max_chars=500)
     text = parser.parse(_LOCAL_MD)

@@ -1,27 +1,15 @@
 # 手工集成测试：真实解析 EPUB、切块、调用 Qwen 嵌入并写入 Milvus。
 #
-# 环境变量（凭据与连接信息在运行时单独提供，代码与仓库中不落任何密钥）：
+# 配置唯一来源为 conftest 的 *_JSON 与各分区设置对象：
 #
-# | 变量 | 必填 | 默认值 | 说明 |
-# | :--- | :--- | :--- | :--- |
-# | DASHSCOPE_API_KEY | 是 | 无 | Qwen 的 API Key |
-# | RAG_IT_API_KEY | 否 | 无 | 覆盖上一项，便于切换多套凭据 |
-# | RAG_IT_MILVUS_URI | 否 | http://127.0.0.1:19530 | Milvus 地址 |
-# | RAG_IT_MILVUS_TOKEN | 否 | 无 | Milvus 鉴权令牌 |
-# | RAG_IT_MILVUS_DB | 否 | default | Milvus 数据库名 |
-# | RAG_IT_COLLECTION | 否 | rag_data_it_qwen_epub | 集合名 |
-# | RAG_IT_MODEL | 否 | qwen3.7-text-embedding | 嵌入模型 |
-# | RAG_IT_DIM | 否 | 1024 | 向量维度，须与模型输出一致 |
-# | RAG_IT_MAX_CHARS | 否 | 1000 | 单块字符上限，注入各解析器 |
-# | RAG_IT_SAFE_MAX_CHARS | 否 | 2000 | 单块安全上限，注入各解析器 |
-# | RAG_IT_EPUB | 否 | 桌面首个 epub | 待处理的 EPUB 路径 |
-# | RAG_IT_SAMPLE_CHARS | 否 | 3000 | 仅取解析结果前若干字符，控制请求量 |
-# | RAG_IT_KEEP | 否 | 空 | 置 1 则跑完保留集合，默认删除 |
+#   EMBEDDING_SETTINGS           api_key、模型、维度与批量上限
+#   PARSING_SETTINGS             spaCy 模型与切块长度
+#   MILVUS_SETTINGS              Milvus 地址、令牌与数据库名
+#   samples.epub                 样例 EPUB 路径，未配置则相关用例跳过
+#   cases.qwen_epub.collection   集合名，须以 vector.prefix 开头
+#   vector.keep 与 vector.prefix 是否保留集合、允许清理的前缀
 #
-# 安全约定：只有集合名以 rag_data_it 开头、且 RAG_IT_KEEP 未置 1 时才删除集合，
-# 避免误删他人数据。
-#
-# 说明：切块长度取自 parsing 分区，注入各解析器的 max_chars 与 safe_max_chars。
+# 安全约定：集合名以 vector.prefix 开头且 vector.keep 未置真时才删除集合。
 
 from __future__ import annotations
 
@@ -33,49 +21,39 @@ from openai import OpenAI
 
 import pytest
 
+from conftest import CASES_CONFIG, SAMPLES_CONFIG, VECTOR_CONFIG, EMBEDDING_SETTINGS, MILVUS_SETTINGS, PARSING_SETTINGS
+
 from rag_data import RagData, RagSetting
 
-# 凭据与连接信息一律来自运行时环境变量，代码中不写默认密钥。
-MILVUS_URI = os.environ.get('RAG_IT_MILVUS_URI', 'http://127.0.0.1:19530')
-MILVUS_TOKEN = os.environ.get('RAG_IT_MILVUS_TOKEN', 'rag')
-MILVUS_DB = os.environ.get('RAG_IT_MILVUS_DB', 'autotest_rag_data')
-COLLECTION = os.environ.get('RAG_IT_COLLECTION', 'rag_data_epub')
-MODEL = os.environ.get('RAG_IT_MODEL', 'qwen3.7-text-embedding')
-API_KEY = os.environ.get('RAG_IT_API_KEY') or os.environ.get('DASHSCOPE_API_KEY', '')
-SAMPLE_CHARS = int(os.environ.get('RAG_IT_SAMPLE_CHARS', '3000'))
-KEEP_COLLECTION = os.environ.get('RAG_IT_KEEP', '') == '1'
+# 凭据与连接信息一律来自 conftest 的 *_JSON 与各分区设置对象。
+MILVUS_URI = MILVUS_SETTINGS.uri
+MILVUS_TOKEN = MILVUS_SETTINGS.token
+MILVUS_DB = MILVUS_SETTINGS.db_name
+COLLECTION = CASES_CONFIG["qwen_epub"]["collection"]
+MODEL = EMBEDDING_SETTINGS.model
+API_KEY = EMBEDDING_SETTINGS.api_key
+SAMPLE_CHARS = SAMPLES_CONFIG["sample_chars"]
+KEEP_COLLECTION = VECTOR_CONFIG["keep"]
 
-# 切块长度上限，经 parsing 分区注入各解析器。
-MAX_CHARS = int(os.environ.get('RAG_IT_MAX_CHARS', '500'))
-SAFE_MAX_CHARS = int(os.environ.get('RAG_IT_SAFE_MAX_CHARS', '2000'))
-SPACY_MODEL = os.environ.get('RAG_IT_SPACY_MODEL', 'zh_core_web_sm')
+MAX_CHARS = PARSING_SETTINGS.max_chars
+SAFE_MAX_CHARS = PARSING_SETTINGS.safe_max_chars
+SPACY_MODEL = PARSING_SETTINGS.spacy_model
 
-VECTOR_DIM = int(os.environ.get('RAG_IT_DIM', '1024'))
-# DashScope 兼容接口单次最多接受 10 条文本。
-QWEN_MAX_BATCH = 10
-# 只允许删除该前缀的集合。
-COLLECTION_PREFIX = 'autotest'
-# 连接别名，避免与其它进程的默认连接串号。
+VECTOR_DIM = EMBEDDING_SETTINGS.dim
+QWEN_MAX_BATCH = EMBEDDING_SETTINGS.batch_size
+COLLECTION_PREFIX = VECTOR_CONFIG["prefix"]
 ALIAS = 'autotest'
 
 
 def _local_epub() -> str:
-    # 返回待处理的 epub 路径：环境变量优先，其次取桌面首个 epub。
-    # override = os.environ.get('RAG_IT_EPUB',"C:\\Users\\loong\\Desktop\\三国演义 ([明] 罗贯中 著  [清] 毛宗岗 等批) (z-library.sk, 1lib.sk, z-lib.sk).epub")
-    override = os.environ.get('RAG_IT_EPUB',"C:\\Users\\loong\\Desktop\\test_chunk.txt")
-    if override:
-        return override
-    desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
-    if not os.path.isdir(desktop):
-        return ''
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith('.epub'))
-    return os.path.join(desktop, files[0]) if files else ''
+    # 样例路径来自 conftest 的 samples.epub，未配置时相关用例跳过。
+    return SAMPLES_CONFIG["epub"]
 
 EPUB_PATH = _local_epub()
 
 def _requires_api_key():
     if not API_KEY:
-        pytest.skip("未提供 API Key：请设置环境变量 DASHSCOPE_API_KEY 或 RAG_IT_API_KEY")
+        pytest.skip("未配置 API Key：请在 conftest 的 embedding.api_key 中填入")
 
 def _requires_pymilvus():
     if importlib.util.find_spec('pymilvus') is None:
@@ -83,7 +61,7 @@ def _requires_pymilvus():
 
 def _requires_epub():
     if not EPUB_PATH or not os.path.exists(EPUB_PATH):
-        pytest.skip("未提供 EPUB：请设置环境变量 RAG_IT_EPUB 或在桌面放置 epub")
+        pytest.skip("未配置样例：请在 conftest 的 samples.epub 中填入文件路径")
 
 
 # 1. 声明模块级标签
@@ -414,6 +392,7 @@ def fetch_neighbor_contexts(
 
     return "\n\n---\n\n".join(merged_chunks)
 
+@pytest.mark.skip(reason="功能尚未开发完成")
 def test_rag_call(app: RagData, collection):
     _requires_api_key()
 

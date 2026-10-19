@@ -7,6 +7,8 @@ import os
 
 import pytest
 
+from conftest import SAMPLES_CONFIG
+
 from rag_data.exceptions import ParserDependencyError
 from rag_data.parsers.base import DocumentParser, DEFAULT_MODEL, load_nlp
 from rag_data.parsers.epub import EpubParser
@@ -109,21 +111,14 @@ def test_chunk_splits_complex_chinese_text():
 
 
 def _local_epub():
-    "返回本机可用于冒烟的 epub 路径；不可用则返回空串。"
-    override = os.environ.get("RAG_TEST_EPUB","C:\\Users\\loong\\Desktop\\三国演义 ([明] 罗贯中 著  [清] 毛宗岗 等批) (z-library.sk, 1lib.sk, z-lib.sk).epub")
-    if override:
-        return override
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if not os.path.isdir(desktop):
-        return ""
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith(".epub"))
-    return os.path.join(desktop, files[0]) if files else ""
+    # 样例路径来自 conftest 的 SAMPLES_CONFIG
+    return SAMPLES_CONFIG["epub"]
 
 
 _LOCAL_EPUB = _local_epub()
 
 
-@pytest.mark.skipif(not _LOCAL_EPUB or not os.path.exists(_LOCAL_EPUB), reason="本机示例 epub 不存在：请设置 RAG_TEST_EPUB，或把 .epub 放到桌面")
+@pytest.mark.skipif(not _LOCAL_EPUB or not os.path.exists(_LOCAL_EPUB), reason="本机示例 epub 不存在：请设置 samples.epub，或把 .epub 放到桌面")
 def test_local_epub_parse_then_chunk():
     parser = EpubParser(max_chars=500)
     text = parser.parse(_LOCAL_EPUB)

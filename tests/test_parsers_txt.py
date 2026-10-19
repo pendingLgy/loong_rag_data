@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from conftest import SAMPLES_CONFIG
+
 from rag_data.exceptions import ParserDependencyError
 from rag_data.parsers.base import DocumentParser, load_nlp, DEFAULT_MODEL
 from rag_data.parsers.txt import TxtParser
@@ -112,21 +114,14 @@ def test_chunk_real_sentencizer_complex_chinese():
 
 
 def _local_txt():
-    "返回本机可用于冒烟的 txt 路径；不可用则返回空串。"
-    override = os.environ.get("RAG_TEST_TXT","C:\\Users\\loong\\Desktop\\伯特兰·罗素：哲学问题.txt")
-    if override:
-        return override
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if not os.path.isdir(desktop):
-        return ""
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith(".txt"))
-    return os.path.join(desktop, files[0]) if files else ""
+    # 样例路径来自 conftest 的 SAMPLES_CONFIG
+    return SAMPLES_CONFIG["txt"]
 
 
 _LOCAL_TXT = _local_txt()
 
 
-@pytest.mark.skipif(not _LOCAL_TXT or not os.path.exists(_LOCAL_TXT), reason="本机示例 txt 不存在：请设置 RAG_TEST_TXT，或把 .txt 放到桌面")
+@pytest.mark.skipif(not _LOCAL_TXT or not os.path.exists(_LOCAL_TXT), reason="本机示例 txt 不存在：请设置 samples.txt，或把 .txt 放到桌面")
 def test_local_txt_parse_then_chunk():
     parser = TxtParser(max_chars=2000)
     text = parser.parse(_LOCAL_TXT)

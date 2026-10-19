@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from conftest import SAMPLES_CONFIG
+
 from rag_data.exceptions import ParseError, ParserDependencyError
 from rag_data.parsers.base import DocumentParser, load_nlp, DEFAULT_MODEL
 from rag_data.parsers.pdf import PdfParser
@@ -110,21 +112,14 @@ def test_parse_without_dependency_raises_parser_dependency_error(tmp_path, monke
 
 
 def _local_pdf():
-    "返回本机可用于冒烟的 pdf 路径；不可用则返回空串。"
-    override = os.environ.get("RAG_TEST_PDF","C:\\Users\\loong\\Desktop\\图解HTTP+彩色版.pdf")
-    if override:
-        return override
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    if not os.path.isdir(desktop):
-        return ""
-    files = sorted(name for name in os.listdir(desktop) if name.lower().endswith(".pdf"))
-    return os.path.join(desktop, files[0]) if files else ""
+    # 样例路径来自 conftest 的 SAMPLES_CONFIG
+    return SAMPLES_CONFIG["pdf"]
 
 
 _LOCAL_PDF = _local_pdf()
 
 
-@pytest.mark.skipif(not _LOCAL_PDF or not os.path.exists(_LOCAL_PDF), reason="本机示例 pdf 不存在：请设置 RAG_TEST_PDF，或把 .pdf 放到桌面")
+@pytest.mark.skipif(not _LOCAL_PDF or not os.path.exists(_LOCAL_PDF), reason="本机示例 pdf 不存在：请设置 samples.pdf，或把 .pdf 放到桌面")
 def test_local_pdf_parse_then_chunk():
     try:
         import pdfplumber  # noqa: F401

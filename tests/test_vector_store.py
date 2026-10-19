@@ -5,12 +5,13 @@
 # 末尾的集成用例需真实服务，标记 integration，默认由 addopts 的 -m not integration 跳过；
 # 缺驱动或无服务时按服务名与目标跳过，可用 pytest -rs 查看跳过清单。
 
-import os
 import sys
 from contextlib import contextmanager
 from typing import Any, List, Optional
 
 import pytest
+
+from conftest import CASES_CONFIG, VECTOR_CONFIG, MILVUS_SETTINGS, PG_VECTOR_SETTINGS, VECTOR_SETTINGS
 
 from rag_data.exceptions import ConfigError, OptionalDependencyError, StorageError
 from rag_data.storage.vector_store import (
@@ -508,54 +509,37 @@ def test_build_vector_engine_forwards_overrides(monkeypatch):
 # ---------------- 集成：真实 Milvus 与 PG（默认跳过） ----------------
 #
 # 需人工准备服务与凭据后，显式指定集成标记执行：
-#   set RAG_IT_MILVUS_URI=milvus.internal:19530
-#   set RAG_IT_MILVUS_TOKEN=root:Milvus
-#   set RAG_IT_PG_HOST=localhost
-#   set RAG_IT_PG_PASSWORD=secret
-#   set RAG_IT_VS_BACKEND=both
-#   pytest -m integration -v -s tests
+#   python -m pytest --integration -m integration -v -s
 #
-# 环境变量（凭据与连接信息在运行时单独提供，代码与仓库中不落任何密钥）：
+# 配置一律来自 conftest 的 *_JSON 与各分区设置对象：
+#   vector.backend 与 vector.dim   参与的后端与测试维度
+#   vector.keep 与 vector.prefix   是否保留集合、允许清理的前缀
+#   cases.vector_store.collection  集合名或表名，须以 vector.prefix 开头
+#   MILVUS_SETTINGS                Milvus 地址、令牌与数据库名
+#   PG_VECTOR_SETTINGS             PG 连接信息，连接串非空时优先
 #
-# | 变量 | 必填 | 默认 | 说明 |
-# | :--- | :--- | :--- | :--- |
-# | RAG_IT_VS_BACKEND | 否 | both | 参与的后端：milvus、pg 或 both |
-# | RAG_IT_VS_COLLECTION | 否 | rag_data_it_vector | 集合名或表名，必须以 rag_data_it 开头 |
-# | RAG_IT_VS_DIM | 否 | 8 | 向量维度，测试用小维度以提速 |
-# | RAG_IT_VS_KEEP | 否 | 空 | 置 1 则保留集合，默认跑完删除 |
-# | RAG_IT_MILVUS_URI | 否 | 本机 19530 | Milvus 地址 |
-# | RAG_IT_MILVUS_TOKEN | 否 | 空 | Milvus 鉴权令牌 |
-# | RAG_IT_MILVUS_DB | 否 | 空 | Milvus 数据库名 |
-# | RAG_IT_PG_CONNECTION_STRING | 否 | 空 | 完整连接串，非空时优先 |
-# | RAG_IT_PG_HOST | 否 | localhost | PG 主机 |
-# | RAG_IT_PG_PORT | 否 | 5432 | PG 端口 |
-# | RAG_IT_PG_USER | 否 | postgres | PG 用户 |
-# | RAG_IT_PG_PASSWORD | 否 | 空 | PG 密码 |
-# | RAG_IT_PG_DB | 否 | rag_data_it | PG 数据库 |
-#
-# 安全约定：只允许删除以 rag_data_it 开头的集合或表，避免误删他人数据。
+# 安全约定：只允许删除以 vector.prefix 开头的集合或表，避免误删他人数据。
+VS_BACKEND = VECTOR_CONFIG["backend"].lower()
+VS_COLLECTION = CASES_CONFIG["vector_store"]["collection"]
+VS_DIM = VECTOR_SETTINGS.vector_size
+VS_KEEP = VECTOR_CONFIG["keep"]
+VS_PREFIX = VECTOR_CONFIG["prefix"]
 
-VS_BACKEND = os.environ.get('RAG_IT_VS_BACKEND', 'both').lower()
-VS_COLLECTION = os.environ.get('RAG_IT_VS_COLLECTION', 'rag_data_it_vector')
-VS_DIM = int(os.environ.get('RAG_IT_VS_DIM', '8'))
-VS_KEEP = os.environ.get('RAG_IT_VS_KEEP', '') == '1'
-
-# Milvus 连接参数；默认地址由片段拼接，避免源码出现连续斜杠字面量。
-MILVUS_URI = os.environ.get('RAG_IT_MILVUS_URI', 'http:' + chr(47) * 2 + '127.0.0.1:19530')
-MILVUS_TOKEN = os.environ.get('RAG_IT_MILVUS_TOKEN', '')
-MILVUS_DB = os.environ.get('RAG_IT_MILVUS_DB', '')
+MILVUS_URI = MILVUS_SETTINGS.uri
+MILVUS_TOKEN = MILVUS_SETTINGS.token
+MILVUS_DB = MILVUS_SETTINGS.db_name
 
 # PG 连接参数。
-PG_CONNECTION_STRING = os.environ.get('RAG_IT_PG_CONNECTION_STRING', '')
-PG_HOST = os.environ.get('RAG_IT_PG_HOST', 'localhost')
-PG_PORT = int(os.environ.get('RAG_IT_PG_PORT', '5432'))
-PG_USER = os.environ.get('RAG_IT_PG_USER', 'root')
-PG_PASSWORD = os.environ.get('RAG_IT_PG_PASSWORD', '123456')
-PG_DB = os.environ.get('RAG_IT_PG_DB', 'rag_data_it')
+PG_CONNECTION_STRING = PG_VECTOR_SETTINGS.connection_string
+PG_HOST = PG_VECTOR_SETTINGS.host
+PG_PORT = PG_VECTOR_SETTINGS.port
+PG_USER = PG_VECTOR_SETTINGS.user
+PG_PASSWORD = PG_VECTOR_SETTINGS.password
+PG_DB = PG_VECTOR_SETTINGS.database
 
 
 def _backends() -> List[str]:
-    '''返回本次参与的后端名列表；RAG_IT_VS_BACKEND 可限定为单个后端。'''
+    '''返回本次参与的后端名列表；vector.backend 允许 both。'''
     if VS_BACKEND == 'both':
         return ['milvus', 'pg']
     return [VS_BACKEND]
@@ -597,8 +581,8 @@ def _open_store(backend: str) -> Any:
 
 
 def _drop_store(store: Any) -> None:
-    '''清理集合：仅在未要求保留且集合名以 rag_data_it 开头时删除。'''
-    if VS_KEEP or not str(getattr(store, 'collection_name', '')).startswith('rag_data_it'):
+    '''清理集合：仅在未要求保留且集合名以 vector.prefix 开头时删除。'''
+    if VS_KEEP or not str(getattr(store, 'collection_name', '')).startswith(VS_PREFIX):
         return
     try:
         store.delete_col()
@@ -803,8 +787,8 @@ def test_live_build_from_env_settings(live_store):
 
 
 def test_pg_table_ddl_shape():
-    ddl = table_ddl('rag_data_it_v', 8)
-    assert ddl.startswith('CREATE TABLE IF NOT EXISTS ' + 'rag_data_it_v')
+    ddl = table_ddl('autotest_v', 8)
+    assert ddl.startswith('CREATE TABLE IF NOT EXISTS ' + 'autotest_v')
     assert 'id TEXT PRIMARY KEY' in ddl
     assert 'vector vector(8)' in ddl
     assert 'payload JSONB' in ddl
@@ -844,7 +828,7 @@ def test_pg_extension_installed_true_and_false():
 
 
 
-def _pg_like(use_hnsw=True, use_diskann=False, installed=True, collection='rag_data_it_v'):
+def _pg_like(use_hnsw=True, use_diskann=False, installed=True, collection='autotest_v'):
     '''构造未初始化的 PGVectorStore，并把取游标替换为记录语句的假实现（不连服务）。'''
     store = PGVectorStore.__new__(PGVectorStore)
     store.collection_name = collection
@@ -880,32 +864,32 @@ def _kinds(statements):
 
 def test_pg_create_col_creates_table_and_indexes():
     store, statements = _pg_like()
-    store.create_col('rag_data_it_v', 8)
+    store.create_col('autotest_v', 8)
     assert _kinds(statements) == ['extension', 'table', 'hnsw', 'text']
 
 
 def test_pg_create_col_prefers_diskann_when_extension_present():
     store, statements = _pg_like(use_hnsw=True, use_diskann=True, installed=True)
-    store.create_col('rag_data_it_v', 8)
+    store.create_col('autotest_v', 8)
     assert _kinds(statements) == ['extension', 'table', 'diskann', 'text']
 
 
 def test_pg_create_col_falls_back_to_hnsw_without_extension():
     store, statements = _pg_like(use_hnsw=True, use_diskann=True, installed=False)
-    store.create_col('rag_data_it_v', 8)
+    store.create_col('autotest_v', 8)
     assert _kinds(statements) == ['extension', 'table', 'hnsw', 'text']
 
 
 def test_pg_create_col_skips_vector_index_when_disabled():
     store, statements = _pg_like(use_hnsw=False, use_diskann=False)
-    store.create_col('rag_data_it_v', 8)
+    store.create_col('autotest_v', 8)
     assert _kinds(statements) == ['extension', 'table', 'text']
 
 
 def test_pg_create_col_skips_diskann_for_large_dimension():
     '''DiskANN 在维度较大时不可用，即使扩展已装也应回退 HNSW。'''
     store, statements = _pg_like(use_hnsw=True, use_diskann=True, installed=True)
-    store.create_col('rag_data_it_v', 4096)
+    store.create_col('autotest_v', 4096)
     assert _kinds(statements) == ['extension', 'table', 'hnsw', 'text']
     assert any('vector vector(4096)' in item for item in statements)
 

@@ -123,10 +123,10 @@ pytest -rs -m integration tests   # 只看集成用例的跳过原因
 | :--- | :--- | :--- |
 | 缺可选依赖 | 未装 yaml、loguru、structlog、pdfplumber、python-docx | 依赖名、模块名、安装命令 |
 | 缺外部服务 | MySQL、PG、Milvus 驱动缺失或服务不可达 | 服务名、目标地址、异常类型与原文 |
-| 缺本机示例 | 未设置 RAG_TEST_* 且桌面无对应文件 | 环境变量名与文件放置位置 |
+| 缺本机示例 | 未在 conftest 的 samples 中填写路径 | 需填写的字段名 |
 | 仅适用某后端 | 用例限定 PG 后端 | 当前实际后端名 |
 
-与本机示例相关的环境变量：RAG_TEST_TXT、RAG_TEST_MD、RAG_TEST_PDF、RAG_TEST_DOCX、RAG_TEST_EPUB。
+与本机示例相关的配置：测试目录下 conftest.py 的 samples 分组（txt、md、pdf、docx、epub 五个字段）。
 
 ### 集成测试
 
@@ -138,29 +138,17 @@ pytest -rs -m integration tests   # 只看集成用例的跳过原因
 | tests/test_vector_store.py（integration 段） | 真实 Milvus 或 PostgreSQL 向量库 |
 
 ```bash
-# Windows PowerShell：真实向量库（Milvus 与 PG）
-$env:RAG_IT_VS_BACKEND = "both"
-$env:RAG_IT_VS_COLLECTION = "rag_data_it_vector"
-$env:RAG_IT_MILVUS_URI = "http://127.0.0.1:19530"
-$env:RAG_IT_PG_PASSWORD = "secret"
-hatch run rag_data_dev:pytest -m integration --integration -v -s tests/test_vector_store.py
+# 安装 dev 依赖后按文件或用例筛选
+hatch run rag_data_dev:pytest -m integration --integration -v -s
 
-# 仅跑某一个后端
-$env:RAG_IT_VS_BACKEND = "pg"
-hatch run rag_data_dev:pytest -m integration --integration -v -s tests/test_vector_store.py
-
-# 只跑集成文件中的单个用例
-hatch run rag_data_dev:pytest -m integration --integration -v -s tests/test_integration_qwen_epub_milvus.py::test_chunk_returns_non_empty_blocks -rs
-
-# 真实 EPUB 到 Milvus 的端到端链路
-$env:DASHSCOPE_API_KEY = "sk-xxx"
-hatch run rag_data_dev:pytest -m integration --integration -v -s tests/test_integration_qwen_epub_milvus.py
-
-# 测试集成测试
-hatch run rag_data_dev:pytest -m integration --integration -v -s 
+# 只跑向量库后端或用例名匹配的部分
+hatch run rag_data_dev:pytest -m integration --integration -v -s -k vector_store
+hatch run rag_data_dev:pytest -m integration --integration -v -s -k chunk_returns_non_empty_blocks
 ```
 
-集成用例的环境变量与安全约定见各测试文件头部注释，仓库与代码中不落任何密钥。
+连接信息、密钥、后端选择与样例路径统一写在测试目录下的 conftest.py：只改顶部的各分区 JSON 变量，无需再导出环境变量。
+
+集成用例的配置项与安全约定见各测试文件头部注释，仓库与代码中不落任何密钥。
 
 ## 构建与发布
 

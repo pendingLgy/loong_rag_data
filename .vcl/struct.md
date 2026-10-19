@@ -101,18 +101,22 @@ rag-data/
 │     │     └─ pg_store.py          PGVectorStore（建表与索引）
 │     └─ util/               空目录（仅 __pycache__），待清理
 └─ tests/
-├─ conftest.py                     路径注入、settings 夹具、--integration 选项
+├─ conftest.py                     路径注入、settings 夹具、--integration 选项、集成配置解析（JSON 拆为各 Settings 对象）
    ├─ test_config.py        RagSetting 与 MemorySettings 的分区、三类来源与 enable
-   ├─ test_facade.py        装配方法、RagData 与 MemoryServer 构造与门控
+   ├─ test_facade.py        模块级装配方法与 facade 公开契约
+   ├─ test_facade_ragdata.py RagData 构造、解析与切块
+   ├─ test_facade_memoryserver.py MemoryServer 装配与流程代理
    ├─ test_parsers_*.py     各格式契约、解析与切块、派发与注册表
    ├─ test_embedding.py     向量化注册表、内置 embedder 与 EmbedderHandler
    ├─ test_llm.py           大模型注册表、内置 provider 与 LLMHandler
    ├─ test_db.py            关系库注册表、表结构与 SQLite 端到端、MySQL 与 PG 集成
    ├─ test_vector_store.py  向量库注册表、DDL、引擎，以及真实服务集成
-   └─ test_integration_qwen_epub_milvus.py  真实 EPUB 到 Milvus 端到端
+   ├─ test_integration_qwen_epub_milvus.py  真实 EPUB 到 Milvus 端到端
+   ├─ test_integration_facade_ragdata.py    RagData 集成：真实解析与切块
+   └─ test_integration_facade_memoryserver.py  MemoryServer 集成：四条流程
 ```
 
-memory 子包无独立测试文件：四条流程由 `test_facade.py` 中的替身用例覆盖装配与代理，纯函数（`scope.py`、`stores.py`、`prompts.py`）的用例尚未补齐，详见第 13 节。
+memory 子包无独立测试文件：四条流程由 `test_facade_memoryserver.py` 中的替身用例覆盖装配与代理，纯函数（`scope.py`、`stores.py`、`prompts.py`）的用例尚未补齐，详见第 13 节。
 
 ---
 
@@ -688,29 +692,33 @@ class LocalEmbedder(BaseEmbedder):
 下表为各文件的 `def test_` 静态计数（不含 pytest 参数化展开，也未运行 pytest 核对）：
 
 ```text
-tests（静态统计 405 项 def test_；其中模块级标记 integration 的三个文件合计 143 项）
-├─ conftest.py                     路径注入、settings 夹具、--integration 选项
-├─ test_config.py           55 项  RagSetting 与 MemorySettings 的分区、三类来源与 enable
-├─ test_facade.py           38 项  装配方法、门控、RagData 与 MemoryServer 构造与流程
+tests（静态统计 402 项 def test_；其中模块级标记 integration 的五个文件合计 165 项）
+├─ conftest.py                     路径注入、settings 夹具、--integration 选项、集成配置解析
+├─ test_config.py           56 项  RagSetting 与 MemorySettings 的分区、三类来源与 enable
+├─ test_facade.py          16 项  模块级装配方法、门控与 facade 公开契约
+├─ test_facade_ragdata.py  14 项  RagData 构造、解析派发与切块
+├─ test_facade_memoryserver.py 5 项  MemoryServer 装配、流程代理与门控
 ├─ test_parsers_base.py     16 项  分句、重叠前缀与递归切块
-├─ test_parsers_dispatch.py 20 项  派发、注册表与预实例化复用
-├─ test_parsers_txt.py      12 项  TxtParser 契约、解析与切块
-├─ test_parsers_markdown.py 12 项  MarkdownParser
+├─ test_parsers_dispatch.py 19 项  派发、注册表与预实例化复用
+├─ test_parsers_txt.py      11 项  TxtParser 契约、解析与切块
+├─ test_parsers_markdown.py 11 项  MarkdownParser
 ├─ test_parsers_epub.py     10 项  EpubParser
 ├─ test_parsers_pdf.py      10 项  PdfParser
 ├─ test_parsers_word.py     12 项  WordParser
 ├─ test_embedding.py        21 项  注册表、内置 embedder 与 EmbedderHandler
-├─ test_llm.py              39 项  注册表、内置 provider 与 LLMHandler
-├─ test_db.py               64 项  注册表、表结构、SQLite 端到端、MySQL 与 PG 集成
+├─ test_llm.py              36 项  注册表、内置 provider 与 LLMHandler
+├─ test_db.py               63 项  注册表、表结构、SQLite 端到端、MySQL 与 PG 集成
 ├─ test_vector_store.py     73 项  注册表、DDL、引擎、真实 Milvus 与 PG 集成
-└─ test_integration_qwen_epub_milvus.py  6 项  真实 EPUB 到 Milvus 端到端
+├─ test_integration_qwen_epub_milvus.py  6 项  真实 EPUB 到 Milvus 端到端
+├─ test_integration_facade_ragdata.py  12 项  RagData 集成：真实解析与切块
+└─ test_integration_facade_memoryserver.py  11 项  MemoryServer 集成：四条流程
 ```
 
-集成用例分布在 test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py：这三个文件在模块级声明 pytestmark 为 integration，并检查 --integration 参数，未提供时以 allow_module_level 整体跳过并打印 [SKIP INFO]；默认 addopts 另加 -m not integration 反选。
+集成用例分布在 test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py、test_integration_facade_ragdata.py、test_integration_facade_memoryserver.py：这五个文件在模块级声明 pytestmark 为 integration，并检查 --integration 参数，未提供时以 allow_module_level 整体跳过并打印 [SKIP INFO]；默认 addopts 另加 -m not integration 反选。
 
-跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常，配合 -rs 可查看跳过清单；与本机示例文件相关的环境变量：RAG_TEST_TXT、RAG_TEST_MD、RAG_TEST_PDF、RAG_TEST_DOCX、RAG_TEST_EPUB。
+跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常，配合 -rs 可查看跳过清单。集成用例的配置统一写在测试目录的 conftest.py（顶部的各分区 JSON 变量）：各分区实例化为 Settings 对象，其余从对应 *_CONFIG 字典读取，测试不再读取环境变量；数据库名与集合名统一以 autotest_ 开头，删除动作只在该前缀下执行。
 
-memory 尚无独立测试文件：装配与四条流程代理由 test_facade.py 的替身用例覆盖，`scope.py`、`stores.py`、`prompts.py` 的纯函数用例待补。
+memory 尚无独立测试文件：装配与四条流程代理由 test_facade_memoryserver.py 的替身用例覆盖，`scope.py`、`stores.py`、`prompts.py` 的纯函数用例待补。
 
 ---
 
