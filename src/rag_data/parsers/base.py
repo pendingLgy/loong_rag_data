@@ -9,7 +9,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, FrozenSet, List, Optional
 
-from rag_data.logging.base import LoggerAdapter
 from rag_data.nlp.spacy import DEFAULT_MODEL, clear_cache, load_nlp
 from rag_data.parsers.registry_parser import register_parser
 
@@ -30,10 +29,9 @@ class DocumentParser(ABC):
         if isinstance(name, str) and name:
             register_parser(name, cls)
 
-    def __init__(self, max_chars: int = 500, safe_max_chars = 2000, logger: Optional[LoggerAdapter] = None):
+    def __init__(self, max_chars: int = 500, safe_max_chars = 2000):
         self.max_chars = max_chars
         self.safe_max_chars = safe_max_chars
-        self.logger = logger
 
     @abstractmethod
     def parse(self, path: str) -> str:

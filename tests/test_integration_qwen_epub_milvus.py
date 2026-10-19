@@ -116,11 +116,7 @@ def it_settings() -> RagSetting:
             'api_key': API_KEY,
             'dim': VECTOR_DIM,
             'batch_size': QWEN_MAX_BATCH,
-        },
-        logging={
-            'enable': True,
-            'backend':'loguru',
-        },
+        }
     )
 
 

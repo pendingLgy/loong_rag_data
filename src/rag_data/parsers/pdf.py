@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from rag_data.exceptions import ParseError, ParserDependencyError
-from rag_data.logging.base import LoggerAdapter
 from rag_data.parsers.base import DocumentParser
+
+logger = logging.getLogger(__name__)
 
 PACKAGES = "pdfplumber"
 INSTALL_HINT = "pip install pdfplumber"
@@ -26,11 +28,10 @@ class PdfParser(DocumentParser):
             self,
             max_chars: int = 1000,
             safe_max_chars: int = 2000,
-            logger: Optional[LoggerAdapter] = None,
             header_ratio: float = 0.07,  # 顶部页眉过滤比例（如 7%）
             footer_ratio: float = 0.07,  # 底部页脚过滤比例（如 7%，以 842pt 高度计算约 59pt，可完美覆盖 785~801pt 的页码）
     ):
-        super().__init__(max_chars, safe_max_chars, logger)
+        super().__init__(max_chars, safe_max_chars)
         self.header_ratio = header_ratio
         self.footer_ratio = footer_ratio
 
@@ -142,8 +143,7 @@ class PdfParser(DocumentParser):
             raise ParseError(f"PDF 解析失败：{path}：{str(exc)}") from exc
 
         full_text = "\n".join(all_paragraphs)
-        if self.logger is not None:
-            self.logger.info("PDF 解析完成", source_path=path, chars=len(full_text))
+        logger.info("PDF 解析完成 source_path=%s chars=%s", path, len(full_text))
 
         return full_text
 
@@ -163,6 +163,7 @@ class PdfParser(DocumentParser):
 def _import_deps() -> Any:
     try:
         import pdfplumber
+
         return pdfplumber
     except ImportError as exc:
         raise ParserDependencyError(f"PDF 解析需要 {PACKAGES}，请执行 {INSTALL_HINT}") from exc

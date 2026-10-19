@@ -70,7 +70,6 @@ RagData / MemoryServer（门面）
      │
 MemoryHandler（本期新增）
      ├── config        读取 MemorySettings（llm、db、vector 及各自 enable 开关）
-     ├── logging       日志适配层
      ├── embedding     文本到向量（EmbedderHandler）
      ├── llm           事实抽取（LLMHandler）
      ├── storage.db    历史与消息（SQLDatabase）
@@ -123,7 +122,7 @@ src\rag_data\memory\
 
 ## 4. 配置分区
 
-`MemorySettings` 独立定义于 `config.py`，**不是 `RagSetting` 的子分区**：`RagSetting` 只保留 `parsing`、`embedding`、`logging`，记忆层配置自成一套并带独立前缀 `RAG_MEMORY_`，使 Rag 与 Memory 可分别装配、分别配置。`MODULE_SECTIONS` 与 `SECTION_MODEL_CLASSES` 均只含前三个分区，故把 `memory` 作为 `RagSetting` 的分区键传入会抛 `ConfigError`。
+`MemorySettings` 独立定义于 `config.py`，**不是 `RagSetting` 的子分区**：`RagSetting` 只保留 `parsing`、`embedding`，记忆层配置自成一套并带独立前缀 `RAG_MEMORY_`，使 Rag 与 Memory 可分别装配、分别配置。`MODULE_SECTIONS` 与 `SECTION_MODEL_CLASSES` 均只含这两个分区，故把 `memory` 作为 `RagSetting` 的分区键传入会抛 `ConfigError`。
 
 ```python
 MEMORY_ENV_PREFIX = ENV_PREFIX + "MEMORY_"   # 取值为 "RAG_MEMORY_"
@@ -155,11 +154,12 @@ class MemorySettings(BaseSettings):
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | `enable` | `bool`（`False`） | 记忆分区开关；关闭时 `MemoryServer.memory` 为 `None` |
+| `embedding` | `EmbeddingSettings` | 事实向量化所用嵌入器，独立于解析侧的 embedding 分区 |
 | `llm` | `LLMSettings` | 事实抽取所用大模型，沿用 `llm` 分区字段 |
 | `db` | `DBSettings` | 历史与消息持久化，沿用 `db` 分区字段 |
 | `vector` | `VectorSettings` | 记忆检索所用向量库，沿用 `vector` 分区字段 |
 
-**刻意不含 `embedding` 子分区**：记忆层复用解析侧的 `EmbedderHandler`，由调用方注入（典型来源 `RagData.embedder`）。记忆侧不自建嵌入器，也就不重复声明 embedding 配置。
+**自带 `embedding` 子分区**：记忆侧的嵌入器与解析侧分属两套配置，`MemoryServer` 据此装配独立的 `EmbedderHandler`，互不影响。
 
 **检索与写入默认值下沉为模块常量**：`threshold`、`top_k`、`context_top_k`、`keyword_weight`、`history_messages` 不再作为配置字段，改由 `memory` 包 `handler.py` 的常量承接，避免「配置项与代码默认值」双份漂移：
 
@@ -205,9 +205,9 @@ RAG_MEMORY__VECTOR__BACKEND=pg
 | `vector.enable` 为假 | `MemoryHandler` 构造期 `_validate()` 抛 `ConfigError`：向量库是硬依赖 |
 | `db.enable` 为假 | `ConfigError`：历史与消息持久化是硬依赖 |
 | `llm.enable` 为假 | `ConfigError`：写入一律经大模型抽取，llm 是硬依赖 |
-| 未注入 `embedder` | `ConfigError`：提示注入 `embedder`（`memory` 分区不含 embedding 配置） |
+| `embedding.enable` 为假 | `ConfigError`：记忆层需要嵌入器，请启用 embedding 分区 |
 
-装配分工：`MemoryServer` 按 `settings.db`、`settings.vector`、`settings.llm` 各自装配未注入的组件；`embedder` 无对应配置，只能由调用方注入。四项齐备后构造 `MemoryHandler` 并在构造期完成上述校验。
+装配分工：`MemoryServer` 只接收 settings，内部按 `settings.embedding`、`settings.llm`、`settings.db`、`settings.vector` 装配四类组件；各模块用 `logging.getLogger(__name__)` 自取日志句柄，门面不接收也不透传 logger；四项硬依赖齐备后构造 `MemoryHandler` 并在构造期完成上述校验。
 
 ---
 
@@ -308,18 +308,18 @@ class MemoryBase(ABC):
 
 ```python
 class MemoryHandler:
-    def __init__(self, settings: MemorySettings, logger: Optional[LoggerAdapter] = None,
+    def __init__(self, settings: MemorySettings,
                  embedder: Optional[EmbedderHandler] = None,
                  llm: Optional[LLMHandler] = None,
                  db: Optional[BaseDB] = None,
                  vector: Optional[VectorEngine] = None) -> None: ...
 ```
 
-**构造约定**：四个组件均可注入，便于测试；未注入时由 `MemoryServer` 按 `MemorySettings` 的对应子分区装配（`embedder` 无对应配置，必须由调用方注入）。构造期执行 `_validate()` 校验四项硬依赖，但不发起任何网络或数据库请求（连接由被注入实例自行持有）。
+**构造约定**：四个组件均可注入，便于测试；未注入时由 `MemoryServer` 按 `MemorySettings` 的对应子分区自行装配。构造期执行 `_validate()` 校验四项硬依赖，但不发起任何网络或数据库请求（连接由被注入实例自行持有）。
 
 | 成员 | 说明 |
 | :--- | :--- |
-| `settings`、`logger`、`embedder`、`llm`、`db`、`vector` | 构造后挂载 |
+| `settings`、`embedder`、`llm`、`db`、`vector` | 构造后挂载 |
 | `add`、`search`、`update`、`delete` | 四条流程公共方法 |
 
 

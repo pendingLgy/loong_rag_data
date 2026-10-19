@@ -13,7 +13,6 @@ from rag_data.registry import Ref, Registry
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import LLMSettings
     from rag_data.llm.base import BaseLLMProvider
-    from rag_data.logging.base import LoggerAdapter
 
 # 内置 provider 名称到类路径的映射，按需惰性导入。
 BUILTIN_PROVIDERS: Dict[str, str] = {

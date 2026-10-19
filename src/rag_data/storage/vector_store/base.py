@@ -9,14 +9,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional
+from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
 from rag_data.storage.vector_store.registry_vector import register_vector_store
-
-if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.logging.base import LoggerAdapter
 
 # 支持的向量度量类型。
 MetricType = Literal["COSINE", "L2", "IP"]

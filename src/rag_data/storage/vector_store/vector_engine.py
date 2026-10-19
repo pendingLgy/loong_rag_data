@@ -5,15 +5,17 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from rag_data.exceptions import ConfigError, StorageError
 from rag_data.storage.vector_store.base import VectorStoreBase, VectorStoreResult
 from rag_data.storage.vector_store.registry_vector import available_vector_stores
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import VectorSettings
-    from rag_data.logging.base import LoggerAdapter
 
 # 默认后端、集合名与向量维度。
 DEFAULT_BACKEND = 'milvus'
@@ -22,7 +24,6 @@ DEFAULT_VECTOR_SIZE = 1024
 
 # 默认检索条数。
 DEFAULT_TOP_K = 5
-
 
 
 def build_vector_store(backend: str = DEFAULT_BACKEND, **kwargs: Any) -> VectorStoreBase:
@@ -34,11 +35,11 @@ def build_vector_store(backend: str = DEFAULT_BACKEND, **kwargs: Any) -> VectorS
     if backend == 'pg':
         from rag_data.storage.vector_store.pg_store import PGVectorStore
 
+
         return PGVectorStore(**kwargs)
     raise ConfigError(
         "未登记的向量库后端：" + str(backend) + "；可用：" + ", ".join(available_vector_stores())
     )
-
 
 
 class VectorEngine:
@@ -47,11 +48,9 @@ class VectorEngine:
     def __init__(
         self,
         store: VectorStoreBase,
-        logger: Optional["LoggerAdapter"] = None,
         default_top_k: int = DEFAULT_TOP_K,
     ) -> None:
         self._store = store
-        self._logger = logger
         self.default_top_k = default_top_k
 
     # ---------------- 属性 ----------------
@@ -234,28 +233,23 @@ class VectorEngine:
 
 
     def _log(self, message: str, **fields: Any) -> None:
-        """记录调用日志；未提供 logger 时静默跳过。"""
-        if self._logger is None:
-            return
-        self._logger.info(message, **fields)
-
+        """记录调用日志：字段以 key=value 追加在消息末尾。"""
+        detail = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.info(f"{message} {detail}" if detail else message)
 
 
 def create_vector_engine(
     backend: str = DEFAULT_BACKEND,
-    logger: Optional["LoggerAdapter"] = None,
     default_top_k: int = DEFAULT_TOP_K,
     **kwargs: Any,
 ) -> VectorEngine:
     """构造向量库并包成引擎，一次得到可直接调用的入口。"""
     store = build_vector_store(backend, **kwargs)
-    return VectorEngine(store, logger=logger, default_top_k=default_top_k)
-
+    return VectorEngine(store, default_top_k=default_top_k)
 
 
 def build_vector_engine(
     settings: "VectorSettings",
-    logger: Optional["LoggerAdapter"] = None,
     metric_type: Optional[str] = None,
     **overrides: Any,
 ) -> VectorEngine:
@@ -268,7 +262,7 @@ def build_vector_engine(
     kwargs.update(_backend_kwargs(settings))
     kwargs.update(overrides)
     store = build_vector_store(settings.backend, **kwargs)
-    return VectorEngine(store, logger=logger, default_top_k=settings.top_k)
+    return VectorEngine(store, default_top_k=settings.top_k)
 
 
 def _backend_kwargs(settings: "VectorSettings") -> Dict[str, Any]:

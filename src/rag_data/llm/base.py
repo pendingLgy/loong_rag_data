@@ -11,7 +11,6 @@ from rag_data.llm.registry_llm import register_llm
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import LLMSettings
-    from rag_data.logging.base import LoggerAdapter
 
 
 class BaseLLMProvider(ABC):
@@ -34,9 +33,8 @@ class BaseLLMProvider(ABC):
             # 直接登记类对象，避免本地类因 qualname 无法按路径导入。
             register_llm(name, cls)
 
-    def __init__(self, settings: LLMSettings, logger: LoggerAdapter) -> None:
+    def __init__(self, settings: LLMSettings) -> None:
         self._settings = settings
-        self._logger = logger
 
     # ---------------- 配置解析 ----------------
 

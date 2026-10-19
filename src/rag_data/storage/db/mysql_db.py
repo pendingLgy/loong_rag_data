@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, URL
@@ -33,7 +33,7 @@ class MySQLDB(SQLDatabase):
 
     backend = "mysql"
 
-    def __init__(self, host: str = "localhost", port: int = 3306, user: str = "root", password: str = "", database: str = "rag_data", charset: str = "utf8mb4", logger: Optional[Any] = None) -> None:
+    def __init__(self, host: str = "localhost", port: int = 3306, user: str = "root", password: str = "", database: str = "rag_data", charset: str = "utf8mb4") -> None:
         if not _MYSQL_DRIVER:
             raise OptionalDependencyError("使用 MySQL 数据库需要 pymysql 或 mysql-connector-python") from _MYSQL_ERROR
         self.host = host
@@ -42,7 +42,7 @@ class MySQLDB(SQLDatabase):
         self.password = password
         self.database = database
         self.charset = charset
-        super().__init__(logger=logger)
+        super().__init__()
 
     def _open_engine(self) -> Engine:
         "用离散参数构造 URL，驱动名按可用库选择。"

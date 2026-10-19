@@ -9,7 +9,7 @@
 - 五类文档解析：TXT、Markdown、EPUB、PDF、Word，一种格式一个 DocumentParser 子类；继承基类并声明 backend 即自动注册
 - 按格式切块：规则由各解析器自持（递归切分加四分之一重叠前缀）；spaCy 句柄由门面加载并缓存，逐级注入切块
 - pydantic v2 分区配置 + pydantic-settings，实例化即校验；每个分区带 enable 开关，未启用则不初始化对应组件
-- 日志适配层：stdliblog、loguru、structlog 三后端可切换
+- 日志：直接使用标准库 logging（无适配层、无工厂、无日志配置项），各组件用 logging.getLogger(__name__) 自取，门面不接收 logger
 - 向量化：EmbedderHandler 按配置装配 embedder（openai、qwen），支持注入模型绕过配置
 - 大模型：LLMHandler 按配置装配 provider（openai、qwen、deepseek），提供 chat 与 complete
 - 关系库：SQLite、MySQL、PostgreSQL（基于 SQLAlchemy Core），雪花 ID 主键，启动时检查并按需建表
@@ -35,12 +35,12 @@ vectors = app.embedder.encode(chunks)         # 文本到稠密向量
 
 ## 包根导出
 
-包根 __init__.py 只导出当前目录（直接模块）的公共符号，共 25 个，不含子包与子目录内容：
+包根 __init__.py 只导出当前目录（直接模块）的公共符号，共 23 个，不含子包与子目录内容：
 
 | 分组 | 符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | RagSetting、ParsingSettings、EmbeddingSettings、LoggingSettings、LLMSettings、MemorySettings、ENV_PREFIX、MEMORY_ENV_PREFIX、ENV_NESTED_DELIMITER、SECTION_PARSING、SECTION_EMBEDDING、SECTION_LOGGING |
+| 配置 | RagSetting、ParsingSettings、EmbeddingSettings、LLMSettings、MemorySettings、ENV_PREFIX、MEMORY_ENV_PREFIX、ENV_NESTED_DELIMITER、SECTION_PARSING、SECTION_EMBEDDING |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError、LLMError |
 | 通用设施 | Registry、Ref |
 | 流程门面 | RagData、MemoryServer |
@@ -53,7 +53,7 @@ vectors = app.embedder.encode(chunks)         # 文本到稠密向量
 from rag_data.parsers import ParserHandler, register_parser
 from rag_data.embedding import EmbedderHandler, BaseEmbedder
 from rag_data.llm import LLMHandler, BaseLLMProvider
-from rag_data.logging import LoggerFactory
+from rag_data.memory import MemoryHandler
 from rag_data.storage.db import build_database, HistoryRecord, Message
 from rag_data.storage.vector_store import VectorEngine, build_vector_store, VectorStoreResult
 ```
@@ -100,7 +100,6 @@ memory = MemorySettings.load_yaml('memory.yml')     # 内容为 memory 字段的
 ```bash
 RAG_EMBEDDING__PROVIDER=qwen
 RAG_EMBEDDING__DIM=1024
-RAG_LOGGING__LEVEL=DEBUG
 
 # 记忆分区独立装配，前缀固定为 RAG_MEMORY_
 RAG_MEMORY__ENABLE=true
@@ -117,12 +116,11 @@ RAG_MEMORY__VECTOR__PG__DATABASE=rag_data
 | :--- | :--- |
 | parsing | enable(false)、spacy_model(zh_core_web_sm)、max_chars(500)、safe_max_chars(2000) |
 | embedding | enable(false)、provider(openai)、model(空)、batch_size(128)、dim(1024)、api_key(空)、base_url(空)、timeout(60.0) |
-| logging | enable(true)、backend(stdliblog)、level(INFO)、format(空，读 pyproject)、timezone(空，系统本地) |
-| memory（独立） | enable(false)、llm、db、vector；各子分区沿用自身字段与默认值 |
+| memory（独立） | enable(false)、embedding、llm、db、vector；各子分区沿用自身字段与默认值 |
 
 
-RagSetting 只含 parsing、embedding、logging 三个分区；MemorySettings 独立构造（前缀 RAG_MEMORY_），自带 llm、db、vector，不再出现在 RagSetting 中。
-enable 语义：分区开关；除 logging 默认开启外，其余默认关闭。关闭时门面不初始化对应组件（实例为 None），可避免不必要的依赖与连接。
+RagSetting 只含 parsing、embedding 两个分区；MemorySettings 独立构造（前缀 RAG_MEMORY_），自带 embedding、llm、db、vector，不再出现在 RagSetting 中。
+enable 语义：分区开关；各分区默认关闭。关闭时门面不初始化对应组件（实例为 None），可避免不必要的依赖与连接。
 
 维度一致性：embedding.dim 声明期望输出维度（默认 1024），EmbedderHandler 据此校验每条向量，不一致抛 EmbeddingError。
 
@@ -155,9 +153,9 @@ ParserHandler 的实例方法：
 
 | 方法 | 作用 |
 | :--- | :--- |
-| resolve_parser(path, max_chars=None, safe_max_chars=None, logger=None) | 取该格式解析器实例；配置与缓存一致时复用，否则临时新建 |
-| parse_document(path, logger=None) | 解析单个文档并返回纯文本 |
-| chunk_document(path, text, nlp=None, logger=None, max_chars=None, safe_max_chars=None) | 按扩展名派发到该格式的 chunk |
+| resolve_parser(path, max_chars=None, safe_max_chars=None) | 取该格式解析器实例；配置与缓存一致时复用，否则临时新建 |
+| parse_document(path) | 解析单个文档并返回纯文本 |
+| chunk_document(path, text, nlp=None, max_chars=None, safe_max_chars=None) | 按扩展名派发到该格式的 chunk |
 | parser_classes（属性） | 本次派发使用的解析器类集合 |
 | instances（属性） | 已预实例化的解析器副本 |
 | get_instance(path) | 按扩展名取缓存实例，不新建 |
@@ -235,7 +233,7 @@ EmbedderHandler 也支持注入实现 encode(texts) 的对象以绕过配置：
 ```python
 from rag_data.embedding import EmbedderHandler
 
-embedder = EmbedderHandler(settings.embedding, logger, model=my_model)
+embedder = EmbedderHandler(settings.embedding, model=my_model)
 ```
 
 ## 大模型（llm）
@@ -296,7 +294,7 @@ LLMHandler 同样支持注入实现 chat(messages, **overrides) 的对象以绕�
 ```python
 from rag_data.llm import LLMHandler
 
-llm = LLMHandler(settings.llm, logger, model=my_model)
+llm = LLMHandler(settings.llm, model=my_model)
 reply = llm.complete('用一句话概括', system='你是一名编辑')
 ```
 
@@ -426,24 +424,25 @@ engine.close()
 
 ## 日志（logging）
 
-logging 子包把三种日志库收敛到同一接口，调用方只依赖 LoggerAdapter。
+不做任何日志配置：库内只使用标准库 logging，不调用 basicConfig，也不提供日志相关的配置分区与入口。
 
-| 文件 | 内容 |
+| 约定 | 说明 |
 | :--- | :--- |
-| base.py | LoggerAdapter 抽象：bind 与五个级别方法 |
-| factory.py | LoggerFactory：setup 全局装配与 get_logger 取用 |
-| stdlib_adapter.py | StdlibLogAdapter 与 StdlibTimezoneFormatter（按 tz 格式化时间） |
-| loguru_adapter.py | LoguruAdapter（惰性导入） |
-| structlog_adapter.py | StructlogAdapter（惰性导入） |
+| 模块级 logger | 各模块用 logging.getLogger(__name__) 自取，组件与门面都不接收、不透传 logger |
+| 门面构造 | RagData(settings)、MemoryServer(settings)，均不接收 logger |
+| 级别与格式 | 由调用方自行配置 basicConfig 或自建 handler，库不介入 |
 
 ```python
-from rag_data.logging import LoggerFactory
+import logging
 
-LoggerFactory.setup(backend='structlog', level='INFO', timezone_name='Asia/Shanghai')
-logger = LoggerFactory.get_logger()
+from rag_data import RagData
+from rag_data.config import RagSetting
+
+logging.basicConfig(level=logging.INFO)
+
+app = RagData(RagSetting.load_mapping(parsing={'enable': True}))
+app.parse_document('a.md')
 ```
-
-后端名：stdliblog（默认）、structlog、loguru。format 留空时优先读 pyproject 的 log_cli_format，再回退内置默认（均含完整路径与行号）；timezone 留空用系统本地，可填 UTC 或 IANA 名。
 
 ## 流程门面（facade）
 
@@ -459,31 +458,30 @@ app = RagData(RagSetting.load_mapping(
     embedding={'enable': True},
 ))
 app.parser        # 解析器始终装配，固定为 ParserHandler 实例
-app.embedder      # 已装配；db、vector、llm 交由 MemoryServer 装配
+app.embedder      # 已装配；记忆侧的 embedding、llm、db、vector 由 MemoryServer 自行装配
 text = app.parse_document('a.md')
 chunks = app.chunk_document('a.md', text)
 ```
 
 | 成员 | 说明 |
 | :--- | :--- |
-| settings、parser、logger、nlp、embedder | 构造后挂载的实例变量；未启用的分区为 None |
+| settings、parser、nlp、embedder | 构造后挂载的实例变量；未启用的分区为 None |
 | parser_handler（属性） | 解析派发入口，返回 ParserHandler 实例 |
 | parse_document(path) | 委托 parser 解析单文件为纯文本 |
 | chunk_document(path, text) | 委托 parser 切块，长度取自 parsing 分区 |
 
-装配方法为模块级私有函数，构造时按分区调用；均受对应分区的 enable 门控：
+装配方法为模块级函数：_build_* 为私有实现，构造时按分区调用，均受对应分区的 enable 门控：
 
 | 方法 | 说明 |
 | :--- | :--- |
-| _build_logger(logging_settings) | 装配日志适配层；logging.enable 为 False 时返回 None |
-| _build_nlp(parsing_settings, logger) | 加载 spaCy；parsing.enable 为 False 或不可用时返回 None |
-| _build_embedder(embedding_settings, logger, model=None) | 装配向量化组件；embedding.enable 为 False 时返回 None |
-| _build_db(db_settings, logger) | 按 db.backend 装配关系库；db.enable 为 False 时返回 None |
-| _build_vector(vector_settings, logger) | 按 vector.backend 装配向量引擎；vector.enable 为 False 时返回 None |
-| _build_llm(llm_settings, logger, model=None) | 装配大模型入口；llm.enable 为 False 时返回 None |
-| _build_memory(memory_settings, logger, embedder, llm, db, vector) | 装配 MemoryHandler；memory.enable 为 False 时返回 None |
+| _build_nlp(parsing_settings) | 加载 spaCy；parsing.enable 为 False 或不可用时返回 None |
+| _build_embedder(embedding_settings, model=None) | 装配向量化组件；embedding.enable 为 False 时返回 None |
+| _build_db(db_settings) | 按 db.backend 装配关系库；db.enable 为 False 时返回 None |
+| _build_vector(vector_settings) | 按 vector.backend 装配向量引擎；vector.enable 为 False 时返回 None |
+| _build_llm(llm_settings, model=None) | 装配大模型入口；llm.enable 为 False 时返回 None |
+| _build_memory(memory_settings, embedder, llm, db, vector) | 装配 MemoryHandler；memory.enable 为 False 时返回 None |
 
-RagData 只装配 logging、parsing、embedding；MemoryServer 接收独立的 MemorySettings，装配 logger 与 memory 下的 db、vector、llm，并持有 MemoryHandler；embedder 需由调用方注入。facade 的 __all__ 含 RagData 与 MemoryServer。
+RagData 只装配 parsing、embedding；MemoryServer 只接收独立的 MemorySettings，内部装配 memory 下的 embedding、llm、db、vector，并持有 MemoryHandler。两者的构造签名都是 (settings)：组件日志由各组件按模块名自取，门面既不接收也不透传。facade 的 __all__ 含 RagData 与 MemoryServer。
 
 
 ## 目录结构
@@ -495,12 +493,11 @@ src/rag_data
 - config.py          分区配置模型与三类来源加载（load_mapping、load_env、load_yaml）
 - exceptions.py      领域异常（含 StorageError、LLMError）
 - registry.py        通用注册表（Registry、Ref）
-- facade.py          流程门面 RagData 与私有装配方法 _build_*
+- facade.py          流程门面 RagData、MemoryServer，私有装配方法 _build_*
 - parsers            文档解析：base、各格式子类、parser_handler、registry_parser
 - embedding          向量化：base、registry_embedder、openai 与 qwen embedder、embedder_handler
 - llm                大模型：base、registry_llm、openai、qwen、deepseek 实现、llm_handler
 - storage            存储子包，见下
-- logging            日志适配层：base、factory 与三个适配器
 
 src/rag_data/storage/db
 - base.py            BaseDB 抽象接口
@@ -530,7 +527,6 @@ tests
 - test_parsers_base.py                   切分、重叠前缀与递归切块
 - test_parsers_dispatch.py               派发与解析器注册表
 - test_parsers_txt.py 等                各格式解析与切块
-- test_logging.py                        工厂装配、时区格式化与调用点
 - test_embedding.py  test_llm.py         向量化与大模型注册表、handler
 - test_db.py                             关系库注册表、表结构、SQLite 端到端
 - test_vector_store.py                   向量库注册表、DDL、引擎，以及真实服务集成

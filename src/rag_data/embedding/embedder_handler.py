@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, List, Optional
 
 from rag_data.config import EmbeddingSettings
 from rag_data.embedding.registry_embedder import resolve_embedder
 from rag_data.exceptions import EmbeddingError
-from rag_data.logging.base import LoggerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class EmbedderHandler:
     """向量化处理器：按配置解析并实例化 embedder，注入的 model 优先且绕过配置。"""
 
-    def __init__(self, settings: EmbeddingSettings, logger: Optional[LoggerAdapter] = None, model: Optional[Any] = None) -> None:
+    def __init__(self, settings: EmbeddingSettings, model: Optional[Any] = None) -> None:
         self._settings = settings
-        self._logger = logger
         # 注入的 model 只需实现 encode(texts)，可选提供 max_batch_size，便于测试与自定义。
         self._model = model
         self._provider: Optional[Any] = None
@@ -45,15 +46,14 @@ class EmbedderHandler:
         if self._provider is None:
             name = self._settings.provider
             embedder_cls = resolve_embedder(name)
-            self._provider = embedder_cls(self._settings, self._logger)
+            self._provider = embedder_cls(self._settings)
 
-            if self._logger:
-                self._logger.info(
-                    "Embedder 已装配",
-                    provider=name,
-                    model=getattr(self._provider, "model", ""),
-                    dim=getattr(self._provider, "dim", 0),
-                )
+            logger.info(
+                "Embedder 已装配 provider=%s model=%s dim=%s",
+                name,
+                getattr(self._provider, "model", ""),
+                getattr(self._provider, "dim", 0),
+            )
         return self._provider
 
     def _batch_size(self, target: Any) -> int:

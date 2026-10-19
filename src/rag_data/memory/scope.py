@@ -4,16 +4,18 @@
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
 from rag_data.exceptions import DataError
 
+logger = logging.getLogger(__name__)
+
 # 可用于作用域的实体参数。
 ENTITY_PARAMS = frozenset({"user_id", "agent_id", "run_id"})
 # 不可经 metadata 设置的身份键：三个实体 ID 加上 actor_id。
 IDENTITY_KEYS = ENTITY_PARAMS | {"actor_id"}
-
 
 
 def validate_entity_id(value: Optional[Any], name: str) -> Optional[str]:
@@ -31,13 +33,11 @@ def validate_entity_id(value: Optional[Any], name: str) -> Optional[str]:
     return trimmed
 
 
-
 def strip_identity_keys(
     metadata: Optional[Dict[str, Any]],
     existing: Optional[Dict[str, Any]] = None,
     *,
     context: str = "metadata",
-    logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """剥离 metadata 中的身份键；值未变则静默，值变化则告警并忽略。"""
     if not metadata:
@@ -49,10 +49,8 @@ def strip_identity_keys(
             continue
         if existing is not None and value == existing.get(key):
             continue
-        if logger is not None:
-            logger.warning(context + "：忽略 metadata[" + key + "]，身份字段不可经 metadata 设置")
+        logger.warning(context + "：忽略 metadata[" + key + "]，身份字段不可经 metadata 设置")
     return clean
-
 
 
 def build_scope(
@@ -62,11 +60,10 @@ def build_scope(
     run_id: Optional[Any] = None,
     metadata: Optional[Dict[str, Any]] = None,
     filters: Optional[Dict[str, Any]] = None,
-    logger: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """构造「存储用 payload 模板」与「查询用 filters」；至少需要一个实体 ID。"""
     # 身份范围只由实体参数决定，先剥离调用方 metadata 中的同名键。
-    payload: Dict[str, Any] = strip_identity_keys(metadata, None, context="add", logger=logger)
+    payload: Dict[str, Any] = strip_identity_keys(metadata, None, context="add")
     query: Dict[str, Any] = deepcopy(filters) if filters else {}
 
     user_id = validate_entity_id(user_id, "user_id")
@@ -103,7 +100,6 @@ def session_scope(filters: Dict[str, Any]) -> str:
         if value:
             parts.append(name + "=" + escape_scope_value(value))
     return "&".join(parts)
-
 
 
 def validate_search_params(threshold: Optional[float] = None, top_k: Optional[int] = None) -> None:

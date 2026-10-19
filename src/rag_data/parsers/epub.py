@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+import logging
+from typing import Any, List, Tuple
 
 from rag_data.exceptions import ParseError, ParserDependencyError
-from rag_data.logging.base import LoggerAdapter
 from rag_data.nlp.spacy import DEFAULT_MODEL, load_nlp
 from rag_data.parsers.base import DocumentParser
+
+logger = logging.getLogger(__name__)
 
 PACKAGES = "ebooklib 与 beautifulsoup4"
 INSTALL_HINT = "pip install -e '.[epub]'"
@@ -21,8 +23,8 @@ class EpubParser(DocumentParser):
 
     SUFFIXES = frozenset({".epub"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
-        super().__init__(max_chars, safe_max_chars, logger)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
+        super().__init__(max_chars, safe_max_chars)
 
     def parse(self, path: str) -> str:
         """解析 EPUB：按 reading order 提取各章节段落并序列化返回（优化内存回收）。"""
@@ -45,13 +47,12 @@ class EpubParser(DocumentParser):
             all_paras.extend(paras)
 
         full_text = "\n".join(all_paras)
-        if self.logger is not None:
-            self.logger.debug(
-                "EPUB 解析完成",
-                source_path=path,
-                chapters=len(chapter_paragraphs),
-                chars=len(full_text),
-            )
+        logger.debug(
+            "EPUB 解析完成 source_path=%s chapters=%s chars=%s",
+            path,
+            len(chapter_paragraphs),
+            len(full_text),
+        )
         return full_text
 
     def chunk(
@@ -80,22 +81,17 @@ class EpubParser(DocumentParser):
             if not chap.strip():
                 continue
 
-            if self.logger is not None:
-                self.logger.debug(
-                    "EPUB chunk start",
-                    idx=idx,
-                    chap_length=len(chap),
-                    chars=chap[:30],
-                )
+            logger.debug(
+                "EPUB chunk start idx=%s chap_length=%s chars=%s",
+                idx,
+                len(chap),
+                chap[:30],
+            )
             current_overlap_prefix = self._extract_overlap_prefix([overlap_prefix])
 
             min_chunks = self._process_text_recursive(text=chap, overlap_prefix=current_overlap_prefix, nlp=handle)
 
-            if self.logger is not None:
-                self.logger.debug(
-                    "EPUB chunk end",
-                    idx=idx
-                )
+            logger.debug("EPUB chunk end idx=%s", idx)
 
             all_chunks.extend(min_chunks)
 
@@ -107,14 +103,15 @@ def _import_deps() -> Tuple[Any, Any]:
     try:
         from bs4 import BeautifulSoup
         from ebooklib import epub
+
     except ImportError as exc:
         raise ParserDependencyError(f"EPUB 解析需要 {PACKAGES}，请执行 {INSTALL_HINT}") from exc
     return epub, BeautifulSoup
 
 
-def _load_spacy(model_name: str, logger: Optional[LoggerAdapter] = None) -> Any:
+def _load_spacy(model_name: str) -> Any:
     """加载 spaCy 句柄；未安装或模型缺失时给出安装指引。"""
-    handle = load_nlp(model_name, logger)
+    handle = load_nlp(model_name)
     if handle is None:
         raise ParserDependencyError(
             f"文本切块需要 spacy 及模型 '{model_name}'，请执行 {CHUNK_INSTALL_HINT}"

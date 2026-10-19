@@ -1,4 +1,4 @@
-# 测试公共夹具：确保 src 布局可导入，并提供常用夹具。
+# 测试公共夹具：确认 src 布局可导入，并提供常用夹具。
 import os
 import sys
 
@@ -10,7 +10,6 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from rag_data.config import RagSetting  # noqa: E402
-from rag_data.logging.factory import LoggerFactory  # noqa: E402
 
 
 @pytest.fixture()
@@ -18,15 +17,10 @@ def settings():
     return RagSetting()
 
 
-@pytest.fixture()
-def logger(settings):
-    LoggerFactory.setup(backend=settings.logging.backend, level=settings.logging.level)
-    return LoggerFactory.get_logger()
-
 def pytest_addoption(parser):
     parser.addoption(
         "--integration",
         action="store_true",
         default=False,
-        help="运行真实调用外部服务的集成测试"
+        help="运行真实调用外部服务的集成测试",
     )

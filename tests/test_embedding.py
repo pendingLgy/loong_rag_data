@@ -116,7 +116,7 @@ def test_qwen_embedder_overrides_openai():
 def test_base_embedder_is_abstract():
     # 抽象基类不可直接实例化。
     with pytest.raises(TypeError):
-        BaseEmbedder(EmbeddingSettings(), None)
+        BaseEmbedder(EmbeddingSettings())
 
 
 def test_class_names_use_embedder_suffix():
@@ -130,14 +130,14 @@ def test_class_names_use_embedder_suffix():
 
 def test_handler_uses_injected_model():
     model = _FakeModel(dim=4)
-    handler = EmbedderHandler(EmbeddingSettings(dim=4), None, model=model)
+    handler = EmbedderHandler(EmbeddingSettings(dim=4), model=model)
     assert handler.provider is model
     assert handler.encode(['a', 'b']) == [[0.5] * 4, [0.5] * 4]
     assert model.calls == [['a', 'b']]
 
 
 def test_handler_empty_input_returns_empty():
-    handler = EmbedderHandler(EmbeddingSettings(dim=4), None, model=_FakeModel(dim=4))
+    handler = EmbedderHandler(EmbeddingSettings(dim=4), model=_FakeModel(dim=4))
     assert handler.encode([]) == []
 
 
@@ -148,14 +148,14 @@ def test_handler_defers_instantiation():
         backend = None
         default_dim = 2
 
-        def __init__(self, settings, logger):
-            super().__init__(settings, logger)
+        def __init__(self, settings):
+            super().__init__(settings)
             created.append(self)
 
         def encode(self, texts): return [[0.0] * 2 for _ in texts]
 
     register_embedder('lazy-emb', _Lazy)
-    handler = EmbedderHandler(EmbeddingSettings(provider='lazy-emb', dim=2), None)
+    handler = EmbedderHandler(EmbeddingSettings(provider='lazy-emb', dim=2))
     assert created == []
     handler.encode(['x'])
     assert len(created) == 1
@@ -168,26 +168,26 @@ def test_handler_caches_provider():
         backend = None
         default_dim = 2
 
-        def __init__(self, settings, logger):
-            super().__init__(settings, logger)
+        def __init__(self, settings):
+            super().__init__(settings)
             created.append(self)
 
         def encode(self, texts): return [[0.0] * 2 for _ in texts]
 
     register_embedder('counting-emb', _Counting)
-    handler = EmbedderHandler(EmbeddingSettings(provider='counting-emb', dim=2), None)
+    handler = EmbedderHandler(EmbeddingSettings(provider='counting-emb', dim=2))
     assert handler.provider is handler.provider
     assert len(created) == 1
 
 
 def test_handler_rejects_dim_mismatch():
-    handler = EmbedderHandler(EmbeddingSettings(dim=8), None, model=_FakeModel(dim=4))
+    handler = EmbedderHandler(EmbeddingSettings(dim=8), model=_FakeModel(dim=4))
     with pytest.raises(EmbeddingError):
         handler.encode(['x'])
 
 
 def test_handler_propagates_unknown_provider():
-    handler = EmbedderHandler(EmbeddingSettings(provider='definitely-missing'), None)
+    handler = EmbedderHandler(EmbeddingSettings(provider='definitely-missing'))
     with pytest.raises(ConfigError):
         handler.encode(['x'])
 
@@ -201,14 +201,14 @@ def test_handler_respects_provider_batch_limit():
         def encode(self, texts): return [[0.0] * 2 for _ in texts]
 
     register_embedder('limited-emb', _Limited)
-    handler = EmbedderHandler(EmbeddingSettings(provider='limited-emb', dim=2, batch_size=10), None)
+    handler = EmbedderHandler(EmbeddingSettings(provider='limited-emb', dim=2, batch_size=10))
     # 取配置值与 embedder 上限的较小者，单批最多 1 条。
     target = handler.provider
     assert handler._batch_size(target) == 1
 
 
 def test_handler_batch_size_falls_back_to_config():
-    handler = EmbedderHandler(EmbeddingSettings(dim=2, batch_size=7), None, model=_FakeModel(dim=2))
+    handler = EmbedderHandler(EmbeddingSettings(dim=2, batch_size=7), model=_FakeModel(dim=2))
     assert handler._batch_size(handler.provider) == 7
 
 

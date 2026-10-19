@@ -1,10 +1,10 @@
 # rag-data 包根：仅导出当前目录（直接模块）的公共符号，不含子包与子目录内容。
 #
-# 子包 parsers、embedding、llm、logging 的内容请按具体模块路径取用：
+# 子包 parsers、embedding、llm、memory、storage、nlp 的内容请按具体模块路径取用：
 #
 #   from rag_data.parsers import ParserHandler
-#   from rag_data.embedding import EmbedderAdapter
-#   from rag_data.logging import LoggerFactory
+#   from rag_data.embedding import EmbedderHandler
+#   from rag_data.nlp import load_nlp
 
 from rag_data.__about__ import __version__
 from rag_data.config import (
@@ -12,11 +12,9 @@ from rag_data.config import (
     ENV_PREFIX,
     MEMORY_ENV_PREFIX,
     SECTION_EMBEDDING,
-    SECTION_LOGGING,
     SECTION_PARSING,
     EmbeddingSettings,
     LLMSettings,
-    LoggingSettings,
     MemorySettings,
     ParsingSettings,
     RagSetting,
@@ -40,7 +38,6 @@ __all__ = [
     "RagSetting",
     "ParsingSettings",
     "EmbeddingSettings",
-    "LoggingSettings",
     "LLMSettings",
     "MemorySettings",
     "ENV_PREFIX",
@@ -48,7 +45,6 @@ __all__ = [
     "MEMORY_ENV_PREFIX",
     "SECTION_PARSING",
     "SECTION_EMBEDDING",
-    "SECTION_LOGGING",
     # 契约异常
     "RagDataError",
     "ConfigError",

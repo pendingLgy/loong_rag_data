@@ -11,9 +11,6 @@
 #   RAG_PARSING__SPACY_MODEL=zh_core_web_sm
 #   RAG_PARSING__MAX_CHARS=1000
 #   RAG_PARSING__SAFE_MAX_CHARS=2000
-#   RAG_LOGGING__LEVEL=DEBUG
-#   RAG_LOGGING__FORMAT=%(asctime)s [%(levelname)s] [%(pathname)s:%(lineno)d %(funcName)s()] %(message)s
-#   RAG_LOGGING__TIMEZONE=Asia/Shanghai
 #
 # 记忆分区独立于 RagSetting，前缀为 RAG_MEMORY_，例如：
 #   RAG_MEMORY__ENABLE=true
@@ -36,12 +33,10 @@ from rag_data.exceptions import ConfigError, OptionalDependencyError
 
 SECTION_PARSING = "parsing"
 SECTION_EMBEDDING = "embedding"
-SECTION_LOGGING = "logging"
 
 MODULE_SECTIONS: List[str] = [
     SECTION_PARSING,
     SECTION_EMBEDDING,
-    SECTION_LOGGING,
 ]
 
 # 环境变量前缀与嵌套分隔符：解析侧供 SettingsConfigDict 使用，记忆侧供手工解析使用。
@@ -87,20 +82,6 @@ class EmbeddingSettings(BaseModel):
     base_url: str = Field(default="")
     timeout: float = Field(default=60.0, gt=0)
 
-class LoggingSettings(BaseModel):
-    """日志适配层参数：后端、级别、格式与时区。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # 是否启用该分区；为 False 时门面不初始化对应组件。
-    enable: bool = Field(default=True)
-
-    backend: Literal["stdliblog", "structlog", "loguru"] = "stdliblog"
-    level: str = Field(default="INFO")
-    # 留空时由工厂读取 pyproject 的 log_cli_format，再回退内置默认。
-    format: str = Field(default="")
-    # 时区：留空用系统本地时区，可填 UTC 或 Asia 开头的 IANA 名。
-    timezone: str = Field(default="")
 
 class LLMSettings(BaseModel):
     """大模型参数：provider 决定实现，其余为通用与实现专属配置。"""
@@ -245,7 +226,7 @@ class _MemoryEnvSource(PydanticBaseSettingsSource):
 
 
 class MemorySettings(BaseSettings):
-    """记忆分区：与 RagSetting 相互独立，自带 llm、db、vector 三类子配置。"""
+    """记忆分区：与 RagSetting 相互独立，自带 embedding、llm、db、vector 四类子配置。"""
 
     model_config = SettingsConfigDict(
         # 前缀以单下划线结尾、嵌套又以双下划线分隔，原生解析会把 RAG_MEMORY__DB__BACKEND
@@ -258,7 +239,8 @@ class MemorySettings(BaseSettings):
     # 分区开关；关闭时门面不装配 MemoryHandler。
     enable: bool = Field(default=False)
 
-    # 三类依赖：大模型（事实抽取）、关系库（历史与消息）、向量库（记忆检索）。
+    # 四类依赖：嵌入器（事实向量化）、大模型（事实抽取）、关系库（历史与消息）、向量库（记忆检索）。
+    embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     db: DBSettings = Field(default_factory=DBSettings)
     vector: VectorSettings = Field(default_factory=VectorSettings)
@@ -308,7 +290,6 @@ class MemorySettings(BaseSettings):
 SECTION_MODEL_CLASSES: Dict[str, Type[BaseModel]] = {
     SECTION_PARSING: ParsingSettings,
     SECTION_EMBEDDING: EmbeddingSettings,
-    SECTION_LOGGING: LoggingSettings,
 }
 
 
@@ -327,7 +308,6 @@ class RagSetting(BaseSettings):
 
     parsing: ParsingSettings = Field(default_factory=ParsingSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
-    logging: LoggingSettings = Field(default_factory=LoggingSettings)
 
     @classmethod
     def load_mapping(cls, source: Optional[Mapping[str, Any]] = None, **overrides: Any) -> "RagSetting":

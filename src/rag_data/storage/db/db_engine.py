@@ -17,14 +17,12 @@ from rag_data.storage.db.snowflake import next_id
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import DBSettings
-    from rag_data.logging.base import LoggerAdapter
 
 
 class SQLDatabase(BaseDB):
     """基于 SQLAlchemy Core 的通用实现：单引擎加互斥锁，方言差异由子类提供连接串。"""
 
-    def __init__(self, logger: Optional[Any] = None) -> None:
-        super().__init__(logger)
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self.engine: Optional[Engine] = None
         self.engine = self._open_engine()
@@ -205,12 +203,11 @@ class SQLDatabase(BaseDB):
         self.close()
 
 
-
 # 按配置装配数据库实例：按 backend 选择方言，参数取自对应方言分区。
 # 方言实现按需惰性导入，避免与本模块形成导入环。
 
 
-def build_database(settings: "DBSettings", logger: Optional["LoggerAdapter"] = None) -> BaseDB:
+def build_database(settings: "DBSettings") -> BaseDB:
     """按 DBSettings.backend 构造对应方言的数据库实例。"""
     backend = settings.backend
     if backend == "sqlite":
@@ -219,7 +216,7 @@ def build_database(settings: "DBSettings", logger: Optional["LoggerAdapter"] = N
         path = settings.sqlite.path
         if not path:
             raise ConfigError("未配置 SQLite 库文件路径：请设置 db.sqlite.path 或环境变量 RAG_DB__SQLITE__PATH")
-        return SQLiteDB(db_path=path, logger=logger)
+        return SQLiteDB(db_path=path)
     if backend == "mysql":
         from rag_data.storage.db.mysql_db import MySQLDB
 
@@ -231,7 +228,6 @@ def build_database(settings: "DBSettings", logger: Optional["LoggerAdapter"] = N
             password=mysql.password,
             database=mysql.database,
             charset=mysql.charset,
-            logger=logger,
         )
     from rag_data.storage.db.pg_db import PGDB
 
@@ -243,6 +239,5 @@ def build_database(settings: "DBSettings", logger: Optional["LoggerAdapter"] = N
         user=pg.user,
         password=pg.password,
         database=pg.database,
-        logger=logger,
     )
 

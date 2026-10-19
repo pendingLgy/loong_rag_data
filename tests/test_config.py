@@ -11,7 +11,6 @@ from rag_data.config import (
     ENV_PREFIX,
     MEMORY_ENV_PREFIX,
     SECTION_EMBEDDING,
-    SECTION_LOGGING,
     SECTION_MODEL_CLASSES,
     SECTION_PARSING,
     MODULE_SECTIONS,
@@ -49,7 +48,6 @@ def environ():
     return {
         'RAG_EMBEDDING__PROVIDER': 'qwen',
         'RAG_EMBEDDING__DIM': '8',
-        'RAG_LOGGING__LEVEL': 'DEBUG',
         'OTHER_KEY': 'ignored',
     }
 
@@ -104,7 +102,6 @@ def test_load_env_reads_nested_keys(environ):
     settings = RagSetting.load_env(environ)
     assert settings.embedding.provider == 'qwen'
     assert settings.embedding.dim == 8
-    assert settings.logging.level == 'DEBUG'
 
 
 def test_load_env_ignores_non_prefixed_and_unknown_sections():
@@ -121,8 +118,8 @@ def test_load_env_is_isolated_from_real_environment(monkeypatch):
 
 
 def test_load_env_overrides_beat_environ(environ):
-    settings = RagSetting.load_env(environ, logging={'level': 'ERROR'})
-    assert settings.logging.level == 'ERROR'
+    settings = RagSetting.load_env(environ, embedding={'dim': 16})
+    assert settings.embedding.dim == 16
 
 
 def test_load_env_rejects_unknown_section():
@@ -136,12 +133,11 @@ def test_load_env_rejects_unknown_section():
 def test_load_yaml_reads_sections(tmp_path):
     _require_yaml()
     path = tmp_path / 'config.yml'
-    path.write_text(_dump(['embedding:', '  provider: qwen', '  dim: 8', 'logging:', '  level: DEBUG']), encoding='utf-8')
+    path.write_text(_dump(['embedding:', '  provider: qwen', '  dim: 8']), encoding='utf-8')
     settings = RagSetting.load_yaml(str(path))
     assert isinstance(settings, RagSetting)
     assert settings.embedding.provider == 'qwen'
     assert settings.embedding.dim == 8
-    assert settings.logging.level == 'DEBUG'
 
 
 def test_load_yaml_empty_file_uses_defaults(tmp_path):
@@ -186,6 +182,7 @@ def test_load_yaml_rejects_unknown_section(tmp_path):
 def test_memory_defaults():
     m = MemorySettings()
     assert m.enable is False
+    assert m.embedding.provider == 'openai'
     assert m.llm.provider == 'openai'
     assert m.db.backend == 'sqlite'
     assert m.vector.backend == 'milvus'
@@ -193,13 +190,18 @@ def test_memory_defaults():
 
 def test_memory_not_in_rag_sections():
     assert 'memory' not in MODULE_SECTIONS
-    assert set(SECTION_MODEL_CLASSES) == {SECTION_PARSING, SECTION_EMBEDDING, SECTION_LOGGING}
+    assert set(SECTION_MODEL_CLASSES) == {SECTION_PARSING, SECTION_EMBEDDING}
 
 
 def test_rag_rejects_memory_section():
     with pytest.raises(ConfigError):
         RagSetting.load_mapping({'memory': {'enable': True}})
 
+
+def test_rag_rejects_logging_section():
+    # logging settings were removed; stdlib logging is configured by the caller.
+    with pytest.raises(ConfigError):
+        RagSetting.load_mapping({'logging': {'level': 'DEBUG'}})
 
 def test_rag_setting_has_no_memory_attribute():
     settings = RagSetting.load_mapping()
@@ -427,7 +429,6 @@ def test_vector_rejects_bad_top_k():
         MemorySettings(**{'vector': {'top_k': 0}})
 
 
-
 # ---------------- enable 开关 ----------------
 
 
@@ -435,9 +436,8 @@ def test_sections_default_disabled():
     settings = RagSetting.load_mapping()
     for name in ('parsing', 'embedding'):
         assert getattr(settings, name).enable is False
-    assert settings.logging.enable is True
     m = MemorySettings()
-    for name in ('llm', 'db', 'vector'):
+    for name in ('embedding', 'llm', 'db', 'vector'):
         assert getattr(m, name).enable is False
 
 
@@ -448,4 +448,3 @@ def test_memory_enable_from_env(monkeypatch):
     assert m.enable is True
     assert m.db.enable is True
     assert m.vector.enable is False
-

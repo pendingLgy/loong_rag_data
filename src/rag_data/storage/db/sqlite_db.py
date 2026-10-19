@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, URL
@@ -18,12 +17,12 @@ class SQLiteDB(SQLDatabase):
 
     backend = 'sqlite'
 
-    def __init__(self, db_path: str, logger: Optional[Any] = None) -> None:
+    def __init__(self, db_path: str) -> None:
         if not db_path:
             raise ValueError('db_path 不能为空')
         self.db_path = db_path
         self._ensure_parent(db_path)
-        super().__init__(logger=logger)
+        super().__init__()
 
     @staticmethod
     def _ensure_parent(path: str) -> None:

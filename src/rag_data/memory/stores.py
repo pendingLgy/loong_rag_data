@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -12,8 +13,9 @@ from rag_data.exceptions import StorageError
 from rag_data.storage.db.schema import HistoryRecord, Message
 from rag_data.storage.vector_store.base import VectorStoreResult
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.logging.base import LoggerAdapter
     from rag_data.storage.db import BaseDB
     from rag_data.storage.vector_store.vector_engine import VectorEngine
 
@@ -47,7 +49,6 @@ def to_vector_id(memory_id: int) -> str:
     return str(memory_id)
 
 
-
 def to_vector_id_int(vector_id: Any) -> Optional[int]:
     """向量库 id 回到业务主键；无法解析时返回 None。"""
     try:
@@ -70,7 +71,6 @@ def build_payload(text: str, scope: Dict[str, Any], created_at: Optional[str] = 
     return payload
 
 
-
 def split_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """把 payload 拆成「核心字段 + 提升字段 + 其余 metadata」。"""
     data = dict(payload or {})
@@ -86,7 +86,6 @@ def split_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return merged
 
 
-
 class MemoryStore:
     """向量库与关系库的组合封装：统一批量写入、历史审计与失败降级。"""
 
@@ -94,11 +93,9 @@ class MemoryStore:
         self,
         vector: "VectorEngine",
         db: "BaseDB",
-        logger: Optional["LoggerAdapter"] = None,
     ) -> None:
         self.vector = vector
         self.db = db
-        self.logger = logger
 
 
     @property
@@ -106,14 +103,15 @@ class MemoryStore:
         """后端是否实现关键词检索：用类方法是否被覆盖来判断。"""
         from rag_data.storage.vector_store.base import VectorStoreBase
 
+
         store = getattr(self.vector, "store", None)
         if store is None:
             return False
         return type(store).keyword_search is not VectorStoreBase.keyword_search
 
     def _warn(self, message: str, **fields: Any) -> None:
-        if self.logger is not None:
-            self.logger.warning(message, **fields)
+        detail = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.warning(f"{message} {detail}" if detail else message)
 
 
     def insert_memories(

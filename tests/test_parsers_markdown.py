@@ -57,15 +57,6 @@ def test_parse_reads_markdown_verbatim(tmp_path):
     assert MarkdownParser().parse(str(path)) == content
 
 
-def test_parse_accepts_logger(tmp_path, logger):
-    path = tmp_path / "a.md"
-    path.write_text("正文", encoding="utf-8")
-    assert MarkdownParser(logger=logger).parse(str(path)) == "正文"
-
-
-# ---------------- chunk ----------------
-
-
 def test_chunk_empty_returns_empty_without_handle():
     assert MarkdownParser().chunk("") == []
     assert MarkdownParser().chunk("   \n") == []

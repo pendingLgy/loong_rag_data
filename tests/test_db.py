@@ -81,7 +81,6 @@ def test_register_db_by_decorator():
     assert resolve_db('deco') is _Local
 
 
-
 # ---------------- 数据对象与表结构 ----------------
 
 
@@ -130,7 +129,6 @@ def test_memory_id_is_nullable_bigint_with_index():
     assert isinstance(HISTORY_TABLE.c.memory_id.type, BigInteger)
     assert HISTORY_TABLE.c.memory_id.nullable is True
     assert any(index.name == 'ix_history_memory_id' for index in HISTORY_TABLE.indexes)
-
 
 
 # ---------------- 建表 SQL ----------------
@@ -186,7 +184,6 @@ def test_sqlite_create_sql_is_executable(tmp_path):
     assert db_file.exists()
 
 
-
 # ---------------- 雪花 ID ----------------
 
 
@@ -234,7 +231,6 @@ def test_generator_epoch_constant():
     assert EPOCH_MS == 1704067200000
 
 
-
 # ---------------- build_database 装配工厂 ----------------
 
 
@@ -258,26 +254,14 @@ def test_build_database_routes_sqlite(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(sqlite_module, 'SQLiteDB', _recorder(captured))
     path = str(tmp_path / 'app.db')
-    result = build_database(DBSettings(sqlite=SQLiteSettings(path=path)), 'LOG')
+    result = build_database(DBSettings(sqlite=SQLiteSettings(path=path)))
     assert isinstance(result, _FakeStore)
-    assert captured == {'db_path': path, 'logger': 'LOG'}
+    assert captured == {'db_path': path}
 
 
 def test_build_database_sqlite_requires_path():
     with pytest.raises(ConfigError):
         build_database(DBSettings())
-
-
-def test_build_database_logger_defaults_to_none(monkeypatch, tmp_path):
-    import rag_data.storage.db.sqlite_db as sqlite_module
-
-    captured = {}
-    monkeypatch.setattr(sqlite_module, 'SQLiteDB', _recorder(captured))
-    settings = DBSettings(sqlite=SQLiteSettings(path=str(tmp_path / 'env.db')))
-    build_database(settings)
-    assert captured['db_path'] == str(tmp_path / 'env.db')
-    assert captured['logger'] is None
-
 
 
 def test_build_database_routes_mysql(monkeypatch):
@@ -289,7 +273,7 @@ def test_build_database_routes_mysql(monkeypatch):
         backend='mysql',
         mysql=MySQLSettings(host='db.internal', port=3307, user='app', password='pw', database='rag'),
     )
-    result = build_database(settings, 'LOG')
+    result = build_database(settings)
     assert isinstance(result, _FakeStore)
     assert captured['host'] == 'db.internal'
     assert captured['port'] == 3307
@@ -297,7 +281,6 @@ def test_build_database_routes_mysql(monkeypatch):
     assert captured['password'] == 'pw'
     assert captured['database'] == 'rag'
     assert captured['charset'] == 'utf8mb4'
-    assert captured['logger'] == 'LOG'
 
 
 def test_build_database_routes_pg(monkeypatch):
@@ -306,12 +289,11 @@ def test_build_database_routes_pg(monkeypatch):
     captured = {}
     monkeypatch.setattr(pg_module, 'PGDB', _recorder(captured))
     settings = DBSettings(backend='pg', pg=PGSettings(host='pg.internal', port=6432, database='rag'))
-    build_database(settings, 'LOG')
+    build_database(settings)
     assert captured['host'] == 'pg.internal'
     assert captured['port'] == 6432
     assert captured['database'] == 'rag'
     assert captured['connection_string'] is None
-    assert captured['logger'] == 'LOG'
 
 
 def test_build_database_pg_prefers_connection_string(monkeypatch):
@@ -475,7 +457,6 @@ def test_snowflake_ids_are_sorted_by_creation(db):
     assert len(set(ids)) == len(ids)
 
 
-
 # ---------------- SQLite：路径必填 ----------------
 
 
@@ -500,7 +481,6 @@ def test_db_path_creates_parent_directories(tmp_path):
         assert path.exists()
     finally:
         store.close()
-
 
 
 # ---------------- 后端声明与惰性依赖 ----------------
@@ -543,7 +523,6 @@ def test_pg_constructor_is_lazy_or_connects():
         pass
     except Exception:
         pass
-
 
 
 # ---------------- 集成：MySQL 与 PG（默认跳过） ----------------

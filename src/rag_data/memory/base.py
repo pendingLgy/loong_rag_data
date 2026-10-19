@@ -1,4 +1,4 @@
-# 记忆层抽象契约：四条同步流程，与 storage/logging 等子包同构。
+# 记忆层抽象契约：四条同步流程，与 storage 等子包同构。
 
 from __future__ import annotations
 

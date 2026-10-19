@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, URL
@@ -33,7 +33,7 @@ class PGDB(SQLDatabase):
 
     backend = "pg"
 
-    def __init__(self, connection_string: Optional[str] = None, database: str = "postgres", user: str = "postgres", password: str = "", host: str = "localhost", port: int = 5432, logger: Optional[Any] = None) -> None:
+    def __init__(self, connection_string: Optional[str] = None, database: str = "postgres", user: str = "postgres", password: str = "", host: str = "localhost", port: int = 5432) -> None:
         if not _PG_DRIVER:
             raise OptionalDependencyError("使用 PG 数据库需要 psycopg 或 psycopg2") from _PG_ERROR
         self.connection_string = connection_string
@@ -42,7 +42,7 @@ class PGDB(SQLDatabase):
         self.password = password
         self.host = host
         self.port = port
-        super().__init__(logger=logger)
+        super().__init__()
 
     def _open_engine(self) -> Engine:
         "优先使用显式连接串，否则用离散参数构造 URL。"

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from rag_data.config import LLMSettings
 from rag_data.llm.registry_llm import resolve_llm_provider
-from rag_data.logging.base import LoggerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class LLMHandler:
     """大模型处理器：每次调用按配置解析并实例化 provider，注入的 model 优先且绕过配置。"""
 
-    def __init__(self, settings: LLMSettings, logger: LoggerAdapter, model: Optional[Any] = None) -> None:
+    def __init__(self, settings: LLMSettings, model: Optional[Any] = None) -> None:
         self._settings = settings
-        self._logger = logger
         # 注入的 model 只需实现 chat(messages, **overrides)，便于测试与自定义。
         self._model = model
         self._provider: Optional[Any] = None
@@ -45,13 +46,11 @@ class LLMHandler:
         if self._provider is None:
             name = self._settings.provider
             provider_cls = resolve_llm_provider(name)
-            self._provider = provider_cls(self._settings, self._logger)
-            if self._logger is None:  # logger 可选，缺失时跳过日志
-                return self._provider
-            self._logger.info(
-                "LLM provider 已装配",
-                provider=name,
-                model=getattr(self._provider, "model", ""),
+            self._provider = provider_cls(self._settings)
+            logger.info(
+                "LLM provider 已装配 provider=%s model=%s",
+                name,
+                getattr(self._provider, "model", ""),
             )
         return self._provider
 

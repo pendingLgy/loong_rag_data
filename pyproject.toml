@@ -40,8 +40,6 @@ milvus = ["pymilvus>=2.3"]
 sqlalchemy = ["SQLAlchemy>=2.0"]
 pg = ["psycopg[binary]>=3.1"]
 mysql = ["pymysql>=1.1"]
-loguru = ["loguru>=0.7"]
-structlog = ["structlog>=24.1"]
 epub = [
   "EbookLib>=0.20",
   "beautifulsoup4>=4.15.0"
@@ -71,8 +69,6 @@ installer = "pip"
 features = [
   "parsers",
   "embedding",
-  "loguru",
-  "structlog",
   "epub",
   "dev",
 ]
@@ -93,8 +89,6 @@ features = [
   "pg",
   "mysql",
   "milvus",
-  "loguru",
-  "structlog",
   "dev",
   "word",
   "pdf",

@@ -11,7 +11,6 @@ from rag_data.exceptions import EmbeddingError
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import EmbeddingSettings
-    from rag_data.logging.base import LoggerAdapter
 
 
 class BaseEmbedder(ABC):
@@ -38,9 +37,8 @@ class BaseEmbedder(ABC):
             # 直接登记类对象，避免本地类因 qualname 无法按路径导入。
             register_embedder(name, cls)
 
-    def __init__(self, settings: EmbeddingSettings, logger: LoggerAdapter) -> None:
+    def __init__(self, settings: EmbeddingSettings) -> None:
         self._settings = settings
-        self._logger = logger
 
     # ---------------- 配置解析 ----------------
 

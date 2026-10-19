@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from rag_data.config import MemorySettings
@@ -39,10 +40,10 @@ from rag_data.memory.stores import (
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.embedding.embedder_handler import EmbedderHandler
     from rag_data.llm.llm_handler import LLMHandler
-    from rag_data.logging.base import LoggerAdapter
     from rag_data.storage.db import BaseDB
     from rag_data.storage.vector_store.vector_engine import VectorEngine
 
+logger = logging.getLogger(__name__)
 
 
 # 检索与写入的默认参数：memory 分区不再逐项暴露，集中在此处统一调整。
@@ -59,20 +60,18 @@ class MemoryHandler(MemoryBase):
     def __init__(
         self,
         settings: MemorySettings,
-        logger: Optional["LoggerAdapter"] = None,
         embedder: Optional["EmbedderHandler"] = None,
         llm: Optional["LLMHandler"] = None,
         db: Optional["BaseDB"] = None,
         vector: Optional["VectorEngine"] = None,
     ) -> None:
         self.settings = settings
-        self.logger = logger
         self.embedder = embedder
         self.llm = llm
         self.db = db
         self.vector = vector
         self._validate()
-        self.store = MemoryStore(vector, db=db, logger=logger)
+        self.store = MemoryStore(vector, db=db)
 
 
     # ---------------- 内部辅助 ----------------
@@ -82,15 +81,15 @@ class MemoryHandler(MemoryBase):
         if self.vector is None:
             raise ConfigError("记忆层需要向量库：请启用 vector 分区")
         if self.embedder is None:
-            raise ConfigError("记忆层需要嵌入器：请注入 embedder（memory 分区不含 embedding 配置）")
+            raise ConfigError("记忆层需要嵌入器：请启用 embedding 分区或注入 embedder")
         if self.llm is None:
             raise ConfigError("记忆层需要大模型进行事实抽取：请启用 llm 分区")
         if self.db is None:
             raise ConfigError("记忆层需要关系库记录历史与消息：请启用 db 分区")
 
     def _log(self, message: str, **fields: Any) -> None:
-        if self.logger is not None:
-            self.logger.info(message, **fields)
+        detail = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.info(f"{message} {detail}" if detail else message)
 
 
     @staticmethod
@@ -188,8 +187,8 @@ class MemoryHandler(MemoryBase):
 
 
     def _warn(self, message: str, **fields: Any) -> None:
-        if self.logger is not None:
-            self.logger.warning(message, **fields)
+        detail = " ".join(f"{key}={value}" for key, value in fields.items())
+        logger.warning(f"{message} {detail}" if detail else message)
 
 
     # ---------------- 流程一：写入 ----------------
@@ -209,7 +208,6 @@ class MemoryHandler(MemoryBase):
             agent_id=agent_id,
             run_id=run_id,
             metadata=metadata,
-            logger=self.logger,
         )
         normalized = self._normalize_messages(messages)
 
@@ -339,7 +337,6 @@ class MemoryHandler(MemoryBase):
         return SearchResult(results=results)
 
 
-
     @staticmethod
     def _build_filters(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """查询侧作用域：只保留三个实体键，其余高级过滤条件原样透传。"""
@@ -420,7 +417,7 @@ class MemoryHandler(MemoryBase):
         merged = dict(payload or {})
         previous = merged.get("data")
         if metadata:
-            merged.update(strip_identity_keys(metadata, merged, context="update", logger=self.logger))
+            merged.update(strip_identity_keys(metadata, merged, context="update"))
 
         new_text = text if text is not None else previous
         if new_text is None:

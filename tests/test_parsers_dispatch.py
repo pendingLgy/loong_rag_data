@@ -119,19 +119,6 @@ def test_handler_accepts_default_limits():
     assert parser.safe_max_chars == 84
 
 
-def test_handler_binds_logger_without_rebuild():
-    from rag_data.parsers.parser_handler import ParserHandler
-
-    handler = ParserHandler()
-    sentinel = object()
-    parser = handler.resolve_parser('a.txt', logger=sentinel)
-    assert parser is handler.get_instance('a.txt')
-    assert parser.logger is sentinel
-
-
-# ---------------- 解析器注册表 ----------------
-
-
 def test_builtin_parsers_declared():
     from rag_data.parsers import BUILTIN_PARSERS
 

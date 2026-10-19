@@ -1,6 +1,6 @@
 # rag-data 项目结构
 
-> 版本 0.1.0，Python 3.8 及以上，src 布局，包根仅导出当前目录直接模块的 25 个符号。
+> 版本 0.1.0，Python 3.8 及以上，src 布局，包根仅导出当前目录直接模块的 23 个符号。
 
 本文档描述仓库的物理结构与模块职责，是阅读代码与二次开发的导航图。设计取舍与开发计划见 plan 目录的 DEVELOPMENT_PLAN.md，记忆层设计见 MEMORY_DESIGN.md，使用方式见 README.md，开发、构建与测试说明见 development.md。
 
@@ -99,20 +99,12 @@ rag-data/
 │     │     ├─ vector_engine.py     build_vector_store、VectorEngine、build_vector_engine
 │     │     ├─ milvus_store.py      MilvusVectorStore（单一 BM25 schema）
 │     │     └─ pg_store.py          PGVectorStore（建表与索引）
-│     ├─ logging/
-│     │  ├─ __init__.py        汇总导出适配器与工厂
-│     │  ├─ base.py            LoggerAdapter 抽象
-│     │  ├─ factory.py         LoggerFactory：全局装配与 get_logger
-│     │  ├─ stdlib_adapter.py  标准库适配与 StdlibTimezoneFormatter
-│     │  ├─ loguru_adapter.py  loguru 适配（惰性导入）
-│     │  └─ structlog_adapter.py structlog 适配（惰性导入）
 │     └─ util/               空目录（仅 __pycache__），待清理
 └─ tests/
-   ├─ conftest.py           路径注入、公共夹器与 --integration 选项
+├─ conftest.py                     路径注入、settings 夹具、--integration 选项
    ├─ test_config.py        RagSetting 与 MemorySettings 的分区、三类来源与 enable
    ├─ test_facade.py        装配方法、RagData 与 MemoryServer 构造与门控
    ├─ test_parsers_*.py     各格式契约、解析与切块、派发与注册表
-   ├─ test_logging.py       工厂装配、时区格式化与调用点
    ├─ test_embedding.py     向量化注册表、内置 embedder 与 EmbedderHandler
    ├─ test_llm.py           大模型注册表、内置 provider 与 LLMHandler
    ├─ test_db.py            关系库注册表、表结构与 SQLite 端到端、MySQL 与 PG 集成
@@ -133,7 +125,6 @@ __init__（包根，仅导出直接模块符号）
      ▲
 facade（两个门面：RagData 解析、MemoryServer 记忆）
      ├── config            RagSetting 与 MemorySettings 及三类来源加载
-     ├── logging           日志适配层
      ├── nlp               spaCy 句柄加载与缓存（parsers 与 facade 共用）
      ├── parsers           文档解析与切块（ParserHandler）
      ├── embedding         向量化（EmbedderHandler）
@@ -145,7 +136,7 @@ facade（两个门面：RagData 解析、MemoryServer 记忆）
 
 关键约定：
 
-1. 可选依赖（spacy、loguru、structlog、openai、PyYAML、pymilvus、psycopg、PyMySQL、SQLAlchemy、EbookLib、pdfplumber、python-docx）一律惰性使用，未安装时包仍可正常导入
+1. 可选依赖（spacy、openai、PyYAML、pymilvus、psycopg、PyMySQL、SQLAlchemy、EbookLib、pdfplumber、python-docx）一律惰性使用，未安装时包仍可正常导入
 2. 实现选择走注册表：声明 backend 即自动登记，新增实现不改动装配代码
 3. 注册表只登记实现类，实例化在各自的 handler 或 engine 中进行
 4. 包根只导出当前目录直接模块的公共符号，不跨模块、不列子包
@@ -163,13 +154,13 @@ facade（两个门面：RagData 解析、MemoryServer 记忆）
 
 ### 4.2 __init__.py（包根）
 
-只导出当前目录直接模块的公共符号，共 25 个，不含子包，也不做跨模块重导出：
+只导出当前目录直接模块的公共符号，共 23 个，不含子包，也不做跨模块重导出：
 
 ```python
 from rag_data.config import (
     ENV_NESTED_DELIMITER, ENV_PREFIX, MEMORY_ENV_PREFIX,
-    SECTION_EMBEDDING, SECTION_LOGGING, SECTION_PARSING,
-    EmbeddingSettings, LLMSettings, LoggingSettings,
+    SECTION_EMBEDDING, SECTION_PARSING,
+    EmbeddingSettings, LLMSettings,
     MemorySettings, ParsingSettings, RagSetting,
 )
 from rag_data.exceptions import ConfigError, RagDataError
@@ -183,24 +174,23 @@ from rag_data.registry import Ref, Registry
 
 ### 4.3 config.py
 
-职责：以嵌套模型承载配置，实例化即校验；提供三类来源的加载方法与一组私有工具函数。解析侧与记忆侧是**两套独立配置**：`RagSetting` 只含 parsing、embedding、logging，`MemorySettings` 自带 llm、db、vector 并使用独立前缀。
+职责：以嵌套模型承载配置，实例化即校验；提供三类来源的加载方法与一组私有工具函数。解析侧与记忆侧是**两套独立配置**：`RagSetting` 只含 parsing、embedding，`MemorySettings` 自带 embedding、llm、db、vector 并使用独立前缀。
 
 ```python
 class ParsingSettings(BaseModel): ...      # enable、spacy_model、max_chars、safe_max_chars
 class EmbeddingSettings(BaseModel): ...    # enable、provider、model、batch_size、dim、api_key、base_url、timeout
-class LoggingSettings(BaseModel): ...      # enable、backend、level、format、timezone
 class LLMSettings(BaseModel): ...          # enable、provider、model、temperature、max_tokens、api_key、base_url、timeout
 class SQLiteSettings / MySQLSettings / PGSettings
 class MilvusSettings / PGVectorSettings
 class VectorSettings(BaseModel): ...       # enable、backend、collection、vector_size、top_k、metric_type、milvus、pg
 class DBSettings(BaseModel): ...           # enable、backend、sqlite、mysql、pg
-class MemorySettings(BaseSettings): ...    # enable、llm、db、vector（前缀 RAG_MEMORY_）
-class RagSetting(BaseSettings): ...        # parsing、embedding、logging
+class MemorySettings(BaseSettings): ...    # enable、embedding、llm、db、vector（前缀 RAG_MEMORY_）
+class RagSetting(BaseSettings): ...        # parsing、embedding
 ```
 
-常量：`SECTION_PARSING`、`SECTION_EMBEDDING`、`SECTION_LOGGING`、`MODULE_SECTIONS`、`SECTION_MODEL_CLASSES`、`ENV_PREFIX`（`RAG_`）、`MEMORY_ENV_PREFIX`（`RAG_MEMORY_`）、`ENV_NESTED_DELIMITER`（`__`）。
+常量：`SECTION_PARSING`、`SECTION_EMBEDDING`、`MODULE_SECTIONS`、`SECTION_MODEL_CLASSES`、`ENV_PREFIX`（`RAG_`）、`MEMORY_ENV_PREFIX`（`RAG_MEMORY_`）、`ENV_NESTED_DELIMITER`（`__`）。
 
-`SECTION_LLM`、`SECTION_DB`、`SECTION_VECTOR`、`SECTION_MEMORY` 均已删除：前三个分区改由 `MemorySettings` 直接承载，不再作为 `RagSetting` 的分区键；`memory` 也不再是分区（它是独立的设置类）。因此 `MODULE_SECTIONS` 与 `SECTION_MODEL_CLASSES` 都只含 parsing、embedding、logging，把 `memory` 作为 `RagSetting` 的分区键传入会抛 `ConfigError`。
+`SECTION_LLM`、`SECTION_DB`、`SECTION_VECTOR`、`SECTION_MEMORY`、`SECTION_LOGGING` 均已删除：前三个分区改由 `MemorySettings` 直接承载，不再作为 `RagSetting` 的分区键；`memory` 也不再是分区（它是独立的设置类）。因此 `MODULE_SECTIONS` 与 `SECTION_MODEL_CLASSES` 都只含 parsing、embedding，把 `memory` 作为 `RagSetting` 的分区键传入会抛 `ConfigError`。
 
 两个设置类的类方法（语义对等）：
 
@@ -267,19 +257,15 @@ class Registry(dict):
 
 登记类对象而非路径，可让函数内定义的本地类也能注册；注册表不再提供实例化方法。
 
-### 4.6 logging/
+### 4.6 日志（stdlib logging）
 
-把三种日志库收敛到同一接口，调用方只依赖 LoggerAdapter。
+不提供日志配置：库内只使用标准库 logging，不调用 basicConfig，也没有日志分区、适配层与工厂。
 
-| 文件 | 内容 |
+| 约定 | 说明 |
 | :--- | :--- |
-| base.py | LoggerAdapter 抽象：bind 与五个级别方法 |
-| factory.py | LoggerFactory：setup 全局装配与 get_logger 取用 |
-| stdlib_adapter.py | StdlibLogAdapter 与 StdlibTimezoneFormatter（按 tz 格式化时间） |
-| loguru_adapter.py | LoguruAdapter 与惰性导入 |
-| structlog_adapter.py | StructlogAdapter 与惰性导入 |
-
-后端名称为 stdliblog、structlog、loguru，缺省 stdliblog；格式 fmt 优先级：参数高于 pyproject 的 log_cli_format 高于内置默认（均含完整路径与行号）。
+| 模块级 logger | 各模块用 logging.getLogger(__name__) 自取，不接收也不透传 logger |
+| 门面构造 | (settings) 不接收 logger |
+| 级别与格式 | 由调用方自行配置；库内日志把字段拼为 key=value 后交给 logger 输出 |
 
 ### 4.7 nlp/（spaCy 句柄）
 
@@ -288,7 +274,7 @@ class Registry(dict):
 | 符号 | 说明 |
 | :--- | :--- |
 | `DEFAULT_MODEL` | 默认模型名 `zh_core_web_md` |
-| `load_nlp(model_name=DEFAULT_MODEL, logger=None)` | 加载句柄；不可用时返回 `None` 并告警 |
+| `load_nlp(model_name=DEFAULT_MODEL)` | 加载句柄；不可用时返回 `None` 并告警 |
 | `clear_cache()` | 清空缓存（含失败记录），供测试或运行时重建 |
 | `ensure_sentence_boundaries(nlp)` | 缺 parser 与 sentencizer 时补一个 sentencizer |
 
@@ -326,9 +312,9 @@ ParserHandler：构造时可替换解析器类集合与默认长度；索引在�
 
 | 方法 | 作用 |
 | :--- | :--- |
-| resolve_parser(path, max_chars=None, safe_max_chars=None, logger=None) | 取该格式实例；长度与缓存一致时复用，不一致则临时新建 |
-| parse_document(path, logger=None) | 解析单个文档并返回纯文本 |
-| chunk_document(path, text, nlp=None, logger=None, max_chars=None, safe_max_chars=None) | 按扩展名派发到该格式的 chunk |
+| resolve_parser(path, max_chars=None, safe_max_chars=None) | 取该格式实例；长度与缓存一致时复用，不一致则临时新建 |
+| parse_document(path) | 解析单个文档并返回纯文本 |
+| chunk_document(path, text, nlp=None, max_chars=None, safe_max_chars=None) | 按扩展名派发到该格式的 chunk |
 | get_instance(path) | 取缓存实例，不新建 |
 | parser_classes、instances（属性） | 解析器类集合、已预实例化的实例副本 |
 
@@ -360,9 +346,9 @@ EmbedderHandler → resolve_embedder → Registry → OpenAIEmbedder
 | openai | text-embedding-3-small | 1536 | OPENAI_API_KEY | 无 |
 | qwen | qwen3.7-text-embedding | 1024 | DASHSCOPE_API_KEY | 10 |
 
-EmbedderHandler(settings, logger, model=None)：注入的 model 优先且绕过配置；provider 首次访问时实例化并缓存。批次策略：取 embedding.batch_size 与 embedder 的 max_batch_size 的较小者；编码结果按 embedding.dim 校验，不一致抛 EmbeddingError。
+EmbedderHandler(settings, model=None)：注入的 model 优先且绕过配置；provider 首次访问时实例化并缓存。批次策略：取 embedding.batch_size 与 embedder 的 max_batch_size 的较小者；编码结果按 embedding.dim 校验，不一致抛 EmbeddingError。
 
-memory 复用该组件：`MemorySettings` 不含 embedding 分区，嵌入器由调用方注入（典型来源 `RagData.embedder`）。
+memory 复用该组件：`MemorySettings` 自带 `embedding` 分区，`MemoryServer` 据此装配独立的嵌入器，与解析侧互不影响。
 
 ### 5.3 llm（大模型调用）
 
@@ -389,7 +375,7 @@ LLMHandler → resolve_llm_provider → Registry → OpenAILLMProvider
 | qwen | qwen-plus | DASHSCOPE_API_KEY |
 | deepseek | deepseek-chat | DEEPSEEK_API_KEY |
 
-LLMHandler(settings, logger, model=None) 提供 provider（属性）、chat(messages, **overrides) 与 complete(prompt, system, **overrides)；注入的 model 优先且绕过配置。
+LLMHandler(settings, model=None) 提供 provider（属性）、chat(messages, **overrides) 与 complete(prompt, system, **overrides)；注入的 model 优先且绕过配置。
 
 memory 复用该组件做事实抽取：`MemorySettings.llm` 是独立的一份 `LLMSettings`，与解析侧的 llm 分区互不影响。
 
@@ -411,7 +397,7 @@ MemoryHandler → MemoryStore → VectorEngine（向量读写）
 | prompts.py | ADDITIVE_EXTRACTION_PROMPT、AGENT_CONTEXT_SUFFIX、PAST_MESSAGE_TRUNCATION_LIMIT、generate_additive_extraction_prompt | 抽取提示词与渲染函数 |
 | models.py | MemoryItem、AddResult、SearchResult、UpdateResult、DeleteResult | pydantic 数据对象（extra 为 ignore） |
 
-MemoryHandler(settings, logger=None, embedder=None, llm=None, db=None, vector=None)：五个组件（logger、embedder、llm、db、vector）均可注入，便于测试；构造期调用 `_validate()` 校验四项硬依赖（vector、embedder、llm、db），缺一即抛 `ConfigError`；随后建立 `MemoryStore`，不发起任何网络或数据库请求。
+MemoryHandler(settings, embedder=None, llm=None, db=None, vector=None)：四个组件（embedder、llm、db、vector）均可注入，便于测试；构造期调用 `_validate()` 校验四项硬依赖（vector、embedder、llm、db），缺一即抛 `ConfigError`；随后建立 `MemoryStore`，不发起任何网络或数据库请求。
 
 | 公共方法 | 职责 |
 | :--- | :--- |
@@ -450,7 +436,7 @@ build_database → SQLiteDB / MySQLDB / PGDB → SQLDatabase（SQLAlchemy Core�
 
 | 文件 | 内容 |
 | :--- | :--- |
-| base.py | BaseDB 抽象接口；声明 backend 即自动登记；__init__(logger=None) |
+| base.py | BaseDB 抽象接口：声明 backend 即自动登记，无状态、无构造参数 |
 | registry_db.py | 纯注册表（BUILTIN_DBS：sqlite、mysql、pg）与注册、解析函数 |
 | db_engine.py | SQLDatabase 通用实现与 build_database 装配函数 |
 | schema.py | METADATA、HISTORY_TABLE、MESSAGES_TABLE、CREATE_SQL、create_table_sql、HistoryRecord、Message |
@@ -470,7 +456,7 @@ SQLDatabase 的公开方法：add_history、batch_add_history、get_history、sa
 
 建表与生命周期：__init__ 打开引擎后检查表是否存在，缺失的才创建（已存在不动）；save_messages 按 session_scope 归组，仅保留每会话最近 keep_last 条；支持 with 上下文管理，close 释放引擎。
 
-build_database(settings, logger=None) 按 settings.backend 惰性导入并构造方言实现：sqlite 要求 settings.sqlite.path 非空，否则抛 ConfigError。
+build_database(settings) 按 settings.backend 惰性导入并构造方言实现：sqlite 要求 settings.sqlite.path 非空，否则抛 ConfigError。
 
 数据对象：HistoryRecord 与 Message 为 pydantic 模型（extra 为 ignore），支持传入字典构造。
 
@@ -501,7 +487,7 @@ VectorStoreBase 抽象方法：create_col、insert、search、delete、update、
 
 VectorEngine：属性 store、backend、collection_name、vector_size；写入 insert、update、delete；检索 search、keyword_search、get、list；维护 list_cols、col_info、reset、delete_col、close，支持 with 上下文管理。写入与检索前校验维度与批量长度，不一致抛 StorageError；默认检索条数取 default_top_k（来自 vector.top_k）。
 
-build_vector_engine(settings, logger=None) 按 settings.backend 组装参数：集合名、维度、度量类型固定注入；连接参数按后端从 milvus 或 pg 分区取，留空字段不下传（交由实现自身默认值）。
+build_vector_engine(settings) 按 settings.backend 组装参数：集合名、维度、度量类型固定注入；连接参数按后端从 milvus 或 pg 分区取，留空字段不下传（交由实现自身默认值）。
 
 memory 通过 `MemoryStore` 复用 `insert`、`update`、`delete`、`get`、`search`、`keyword_search`；后端未实现关键词检索时 `MemoryStore.supports_keyword` 为假，融合权重自动降为 0。
 
@@ -511,19 +497,18 @@ memory 通过 `MemoryStore` 复用 `insert`、`update`、`delete`、`get`、`sea
 
 ### 7.1 facade.py
 
-模块级私有装配方法，各对应一个分区或设置类，且都受 enable 门控（为 False 时返回 None）：
+模块级装配方法：`_build_*` 为私有实现，各对应一个分区或设置类，且通常受 enable 门控（为 False 时返回 None）：
 
 | 方法 | 流程 | 使用者 |
 | :--- | :--- | :--- |
-| _build_logger(logging_settings) | 装配日志适配层 | RagData |
-| _build_nlp(parsing_settings, logger) | 加载 spaCy，不可用时返回 None | RagData |
-| _build_embedder(embedding_settings, logger, model=None) | 装配向量化组件 | RagData |
-| _build_llm(llm_settings, logger, model=None) | 装配大模型入口 | MemoryServer |
-| _build_db(db_settings, logger) | 按 db 分区装配关系库 | MemoryServer |
-| _build_vector(vector_settings, logger) | 按 vector 分区装配向量引擎 | MemoryServer |
-| _build_memory(memory_settings, logger, embedder, llm, db, vector) | 装配 MemoryHandler | MemoryServer |
+| _build_nlp(parsing_settings) | 加载 spaCy；parsing.enable 为 False 或不可用时返回 None | RagData |
+| _build_embedder(embedding_settings, model=None) | 装配向量化组件 | RagData |
+| _build_llm(llm_settings, model=None) | 装配大模型入口 | MemoryServer |
+| _build_db(db_settings) | 按 db 分区装配关系库 | MemoryServer |
+| _build_vector(vector_settings) | 按 vector 分区装配向量引擎 | MemoryServer |
+| _build_memory(memory_settings, embedder, llm, db, vector) | 装配 MemoryHandler | MemoryServer |
 
-两个门面分担不同职责：`RagData` 只装配 logging、parsing、embedding；`MemoryServer` 接收独立的 `MemorySettings`，装配 logger 与 memory 下的 llm、db、vector，embedder 无对应配置必须由调用方注入，最后构造 `MemoryHandler`。
+两个门面分担不同职责：`RagData` 只装配 parsing、embedding；`MemoryServer` 只接收独立的 `MemorySettings`，内部装配 memory 下的 embedding、llm、db、vector，最后构造 `MemoryHandler`。两个门面的构造签名都是 `(settings)`：组件日志由各组件按模块名自取，门面既不接收也不透传 logger。
 
 RagData 是一次装配、逐流程调用的解析门面：
 
@@ -533,7 +518,7 @@ RagData(settings: RagSetting)
 
 | 成员 | 说明 |
 | :--- | :--- |
-| settings、parser、logger、nlp、embedder | 构造后挂载的实例变量；未启用的分区为 None |
+| settings、embedder、db、vector、llm | 构造后挂载的实例变量；对应分区关闭时为 None |
 | parser_handler（属性） | 解析派发入口，返回 ParserHandler 实例 |
 | parse_document(path) | 委托 parser 解析单文件为纯文本 |
 | chunk_document(path, text) | 委托 parser 切块，长度取自 parsing 分区 |
@@ -541,7 +526,7 @@ RagData(settings: RagSetting)
 MemoryServer 是记忆服务门面，代理四条流程：
 
 ```python
-MemoryServer(settings: MemorySettings, logger=None, embedder=None, db=None, vector=None, llm=None)
+MemoryServer(settings: MemorySettings)
 ```
 
 | 成员 | 说明 |
@@ -554,12 +539,12 @@ MemoryServer(settings: MemorySettings, logger=None, embedder=None, db=None, vect
 
 facade 的 __all__ 含 RagData 与 MemoryServer。
 
-### 7.2 包根导出（25 个符号）
+### 7.2 包根导出（23 个符号）
 
 | 分组 | 符号 |
 | :--- | :--- |
 | 版本 | __version__ |
-| 配置 | RagSetting、ParsingSettings、EmbeddingSettings、LoggingSettings、LLMSettings、MemorySettings、ENV_PREFIX、ENV_NESTED_DELIMITER、MEMORY_ENV_PREFIX、SECTION_PARSING、SECTION_EMBEDDING、SECTION_LOGGING |
+| 配置 | RagSetting、ParsingSettings、EmbeddingSettings、LLMSettings、MemorySettings、ENV_PREFIX、ENV_NESTED_DELIMITER、MEMORY_ENV_PREFIX、SECTION_PARSING、SECTION_EMBEDDING |
 | 异常 | RagDataError、ConfigError、DataError、OptionalDependencyError、ParserDependencyError、ParseError、EmbeddingError、LLMError |
 | 通用设施 | Registry、Ref |
 | 流程门面 | RagData、MemoryServer |
@@ -601,7 +586,7 @@ app.vector.search(query, vector, top_k)      稠密检索；keyword_search 走 B
 ### 8.4 记忆四流程
 
 ```text
-MemoryServer(settings, embedder=rag.embedder)   注入嵌入器后按 enable 装配其余组件
+MemoryServer(settings)                          按各分区 enable 装配 embedding、llm、db、vector
     ├─ add(messages, user_id=...)             抽取事实并写入向量库、历史与消息
     ├─ search(query, user_id=...)             双路召回并融合排序
     ├─ update(memory_id, text=...)            改正文或元数据，必要时重算向量
@@ -620,18 +605,20 @@ MemoryServer(settings, embedder=rag.embedder)   注入嵌入器后按 enable 装
 | :--- | :--- |
 | parsing | enable(false)、spacy_model(zh_core_web_sm)、max_chars(500)、safe_max_chars(2000) |
 | embedding | enable(false)、provider(openai)、model(空)、batch_size(128)、dim(1024)、api_key(空)、base_url(空)、timeout(60.0) |
-| logging | enable(true)、backend(stdliblog)、level(INFO)、format(空)、timezone(空) |
 
 记忆侧 `MemorySettings`（独立类，非 `RagSetting` 分区，前缀 `RAG_MEMORY_`）：
 
 | 字段 | 说明 |
 | :--- | :--- |
 | enable(false) | 记忆分区开关；关闭时 `MemoryServer.memory` 为 None |
+| embedding | EmbeddingSettings：enable(false)、provider、model、batch_size、dim、api_key、base_url、timeout |
 | llm | LLMSettings：enable(false)、provider、model、temperature、max_tokens、api_key、base_url、timeout |
 | db | DBSettings：enable(false)、backend(sqlite)、sqlite/mysql/pg 连接参数 |
 | vector | VectorSettings：enable(false)、backend(milvus)、collection(rag_data)、vector_size(1024)、top_k(5)、metric_type(COSINE)、milvus/pg 连接参数 |
 
-`MemorySettings` 刻意不含 embedding 分区：嵌入器由调用方注入。检索与写入的数值参数（threshold、top_k、context_top_k、keyword_weight、history_messages）也不在配置中，由 `memory` 包的模块常量承接，见 5.4 节。
+`MemorySettings` 自带 embedding 分区：记忆侧的嵌入器独立于解析侧。
+
+两个设置类不持有 `logger`：各组件用 `logging.getLogger(__name__)` 自取，级别与格式由调用方自行配置。检索与写入的数值参数（threshold、top_k、context_top_k、keyword_weight、history_messages）也不在配置中，由 `memory` 包的模块常量承接，见 5.4 节。
 
 三类来源：
 
@@ -648,7 +635,6 @@ MemoryServer(settings, embedder=rag.embedder)   注入嵌入器后按 enable 装
 
 ```bash
 RAG_EMBEDDING__DIM=1024
-RAG_LOGGING__LEVEL=DEBUG
 
 RAG_MEMORY__ENABLE=true
 RAG_MEMORY__DB__ENABLE=true
@@ -703,7 +689,7 @@ class LocalEmbedder(BaseEmbedder):
 
 ```text
 tests（静态统计 405 项 def test_；其中模块级标记 integration 的三个文件合计 143 项）
-├─ conftest.py                     路径注入、settings 与 logger 夹器、--integration 选项
+├─ conftest.py                     路径注入、settings 夹具、--integration 选项
 ├─ test_config.py           55 项  RagSetting 与 MemorySettings 的分区、三类来源与 enable
 ├─ test_facade.py           38 项  装配方法、门控、RagData 与 MemoryServer 构造与流程
 ├─ test_parsers_base.py     16 项  分句、重叠前缀与递归切块
@@ -713,7 +699,6 @@ tests（静态统计 405 项 def test_；其中模块级标记 integration 的�
 ├─ test_parsers_epub.py     10 项  EpubParser
 ├─ test_parsers_pdf.py      10 项  PdfParser
 ├─ test_parsers_word.py     12 项  WordParser
-├─ test_logging.py          17 项  工厂装配、时区格式化与调用点
 ├─ test_embedding.py        21 项  注册表、内置 embedder 与 EmbedderHandler
 ├─ test_llm.py              39 项  注册表、内置 provider 与 LLMHandler
 ├─ test_db.py               64 项  注册表、表结构、SQLite 端到端、MySQL 与 PG 集成
@@ -746,8 +731,6 @@ memory 尚无独立测试文件：装配与四条流程代理由 test_facade.py 
 | pg | psycopg（关系库与向量库的 PG 后端） |
 | mysql | PyMySQL（关系库 MySQL 后端） |
 | milvus | pymilvus（向量库 Milvus 后端，建议 2.5 及以上以支持 BM25） |
-| loguru | loguru |
-| structlog | structlog |
 | dev | pytest、pytest-cov、mypy、ruff |
 
 环境装配：pyproject.toml 定义 default 与 rag_data_dev 两套 hatch 环境，按 features 自动安装上述 extras；rag_data_dev 额外包含 sqlalchemy、pg、mysql、milvus、word、pdf、openai。
@@ -773,4 +756,5 @@ memory 未引入新依赖：它复用 embedding、llm 与 storage 三层的现�
 | 包导入 | `import rag_data` 经 facade 间接依赖 memory、storage 的顶层导入，未装 SQLAlchemy 时会抛 ModuleNotFoundError，与可选依赖的惰性原则不符 |
 | 子包导出 | 各子包 __init__.py 的重导出策略尚未完全统一 |
 | 遗留目录 | src 下的 rag_data/util 为空目录（仅 __pycache__），待清理 |
+
 

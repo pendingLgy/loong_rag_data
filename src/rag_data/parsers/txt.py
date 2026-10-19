@@ -4,10 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List
 
 from rag_data.exceptions import ParserDependencyError
-from rag_data.logging.base import LoggerAdapter
 from rag_data.parsers.base import DocumentParser
 
 CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"
@@ -20,8 +19,8 @@ class TxtParser(DocumentParser):
 
     SUFFIXES = frozenset({".txt"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
-        super().__init__(max_chars, safe_max_chars, logger)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
+        super().__init__(max_chars, safe_max_chars)
 
     def parse(self, path: str) -> str:
         """读取纯文本原文。"""

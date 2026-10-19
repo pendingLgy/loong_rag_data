@@ -209,7 +209,6 @@ def test_milvus_record_truncates_long_text():
     assert len(row["text"]) == 65535
 
 
-
 # ---------------- PG：SQL 条件构造（不连服务） ----------------
 
 
@@ -275,7 +274,6 @@ def test_pg_filter_empty():
     from rag_data.storage.vector_store.pg_store import _build_filter_conditions
     assert _build_filter_conditions(None) == ([], [])
     assert _build_filter_conditions({}) == ([], [])
-
 
 
 # ---------------- 惰性依赖与缺库行为 ----------------
@@ -416,7 +414,6 @@ def test_engine_rejects_payload_length_mismatch():
         engine.insert([[1.0, 2.0, 3.0]], payloads=[{}, {}])
 
 
-
 def test_build_vector_store_rejects_unknown_backend():
     with pytest.raises(ConfigError):
         build_vector_store('nope')
@@ -461,7 +458,7 @@ def test_build_vector_engine_injects_milvus_params(monkeypatch):
 
     captured = _install_fake_build(monkeypatch)
     settings = VectorSettings(backend='milvus', collection='docs', vector_size=768, top_k=4)
-    engine = build_vector_engine(settings, 'LOG')
+    engine = build_vector_engine(settings)
     assert captured['backend'] == 'milvus'
     assert captured['kwargs']['collection_name'] == 'docs'
     assert captured['kwargs']['vector_size'] == 768
@@ -505,7 +502,6 @@ def test_build_vector_engine_forwards_overrides(monkeypatch):
     captured = _install_fake_build(monkeypatch)
     build_vector_engine(VectorSettings(), uri='milvus.internal:19530')
     assert captured['kwargs']['uri'] == 'milvus.internal:19530'
-
 
 
 
@@ -626,7 +622,6 @@ def live_store(request):
         _drop_store(store)
 
 
-
 def _flush(store: Any) -> None:
     '''Milvus 写入或更新后需 flush 才能被后续查询看到；PG 无需处理。'''
     client = getattr(store, 'client', None)
@@ -652,13 +647,11 @@ def _ids(results: Any) -> List[str]:
 
 
 
-
 def test_live_collection_is_ready(live_store):
     '''集合已建立：list_cols 包含目标集合，col_info 可读。'''
     assert VS_COLLECTION in live_store.list_cols()
     info = live_store.col_info()
     assert isinstance(info, dict) and info
-
 
 
 
@@ -671,7 +664,6 @@ def test_live_insert_and_get(live_store):
     assert first is not None
     assert first.id == '0'
     assert (first.payload or {}).get('tag') == 'alpha'
-
 
 
 
@@ -689,13 +681,11 @@ def test_live_search_orders_by_similarity(live_store):
 
 
 
-
 def test_live_search_respects_top_k(live_store):
     '''top_k 限制返回条数。'''
     live_store.insert(_sample_vectors(3), ids=['0', '1', '2'])
     _flush(live_store)
     assert len(live_store.search('q', _sample_vectors(1)[0], top_k=2)) == 2
-
 
 
 
@@ -706,7 +696,6 @@ def test_live_search_with_equality_filter(live_store):
     _flush(live_store)
     hits = live_store.search('q', _sample_vectors(1)[0], top_k=5, filters={'tag': 'beta'})
     assert sorted(_ids(hits)) == ['1', '2']
-
 
 
 
@@ -723,7 +712,6 @@ def test_live_update_payload(live_store):
 
 
 
-
 def test_live_delete(live_store):
     '''删除后该 id 读不到。'''
     live_store.insert(_sample_vectors(2), ids=['0', '1'])
@@ -734,13 +722,11 @@ def test_live_delete(live_store):
 
 
 
-
 def test_live_list_returns_written_rows(live_store):
     '''list 能看到已写入的 id（外层嵌套已拍平）。'''
     live_store.insert(_sample_vectors(2), ids=['0', '1'])
     _flush(live_store)
     assert set(_ids(_flatten(live_store.list(top_k=10)))) >= {'0', '1'}
-
 
 
 
@@ -755,7 +741,6 @@ def test_live_reset_clears_collection(live_store):
 
 
 
-
 def test_live_keyword_search_optional(live_store):
     '''关键词检索：实现不支持时返回 None，支持时返回列表；两者都接受。'''
     live_store.insert(_sample_vectors(1), payloads=[{'text_lemmatized': 'rolling memory summary'}], ids=['0'])
@@ -765,10 +750,9 @@ def test_live_keyword_search_optional(live_store):
 
 
 
-
 def test_live_engine_end_to_end(live_store):
     '''引擎包装真实向量库：写入、检索、读取与列表全部走通。'''
-    engine = VectorEngine(live_store, None, default_top_k=2)
+    engine = VectorEngine(live_store, default_top_k=2)
     assert engine.backend == live_store.backend
     assert engine.collection_name == VS_COLLECTION
     assert engine.insert(_sample_vectors(3), ids=['0', '1', '2']) == 3
@@ -781,14 +765,12 @@ def test_live_engine_end_to_end(live_store):
 
 
 
-
 def test_live_engine_rejects_dimension_mismatch(live_store):
     '''引擎按集合维度校验，写入维度不符时抛 StorageError。'''
     wrong_dim = 1 if VS_DIM != 1 else 2
     engine = VectorEngine(live_store)
     with pytest.raises(StorageError):
         engine.insert([[0.0] * wrong_dim])
-
 
 
 
@@ -817,7 +799,6 @@ def test_live_build_from_env_settings(live_store):
 
 
 
-
 # ---------------- PG 建表与索引 DDL（不连服务） ----------------
 
 
@@ -841,7 +822,6 @@ def test_pg_diskann_index_ddl_shape():
     assert 'USING diskann (vector)' in ddl
 
 
-
 def test_pg_text_index_ddl_tracks_keyword_expression():
     '''GIN 索引表达式与 keyword_search 共用同一常量，避免二者漂移导致索引失效。'''
     import inspect
@@ -861,7 +841,6 @@ def test_pg_extension_installed_true_and_false():
 
     assert _extension_installed(_Cursor(True), 'vectorscale') is True
     assert _extension_installed(_Cursor(False), 'vectorscale') is False
-
 
 
 
@@ -899,7 +878,6 @@ def _kinds(statements):
 
 
 
-
 def test_pg_create_col_creates_table_and_indexes():
     store, statements = _pg_like()
     store.create_col('rag_data_it_v', 8)
@@ -930,7 +908,6 @@ def test_pg_create_col_skips_diskann_for_large_dimension():
     store.create_col('rag_data_it_v', 4096)
     assert _kinds(statements) == ['extension', 'table', 'hnsw', 'text']
     assert any('vector vector(4096)' in item for item in statements)
-
 
 
 

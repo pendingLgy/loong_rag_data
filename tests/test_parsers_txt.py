@@ -64,15 +64,6 @@ def test_parse_reads_text_verbatim(tmp_path):
     assert TxtParser().parse(str(path)) == "第一行\n第二行"
 
 
-def test_parse_accepts_logger(tmp_path, logger):
-    path = tmp_path / "a.txt"
-    path.write_text("正文", encoding="utf-8")
-    assert TxtParser(logger=logger).parse(str(path)) == "正文"
-
-
-# ---------------- chunk ----------------
-
-
 def test_chunk_empty_returns_empty_without_handle():
     assert TxtParser().chunk("") == []
     assert TxtParser().chunk("   ") == []

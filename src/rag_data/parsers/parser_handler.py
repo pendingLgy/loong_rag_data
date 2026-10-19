@@ -2,7 +2,7 @@
 #
 # 每种格式一个模块，各自定义一个 DocumentParser 子类：
 #   SUFFIXES             该类负责的后缀
-#   parse(path, logger)  文件 -> 纯文本
+#   parse(path)           文件 -> 纯文本
 #   chunk(text, ...)     纯文本 -> 切块（规则各格式自持）
 #
 # markdown.py  MarkdownParser  .md、.markdown
@@ -21,7 +21,6 @@ import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
 from rag_data.exceptions import ParseError
-from rag_data.logging.base import LoggerAdapter
 from rag_data.parsers.base import DocumentParser
 from rag_data.parsers.registry_parser import parser_classes
 
@@ -115,13 +114,9 @@ class ParserHandler:
         path: str,
         max_chars: Optional[int] = None,
         safe_max_chars: Optional[int] = None,
-        logger: Optional[LoggerAdapter] = None,
     ) -> DocumentParser:
         """按扩展名取解析器实例；配置与缓存一致时直接复用，否则临时新建。"""
         parser = self.get_instance(path)
-        # logger 按调用时绑定，赋值开销极低，不触发实例重建。
-        if logger is not None:
-            parser.logger = logger
         if not self._needs_custom(parser, max_chars, safe_max_chars):
             return parser
         overrides: Dict[str, Any] = {}
@@ -129,28 +124,25 @@ class ParserHandler:
             overrides['max_chars'] = max_chars
         if safe_max_chars is not None:
             overrides['safe_max_chars'] = safe_max_chars
-        if logger is not None:
-            overrides['logger'] = logger
         return type(parser)(**overrides)
 
 
-    def parse_document(self, path: str, logger: Optional[LoggerAdapter] = None) -> str:
+    def parse_document(self, path: str) -> str:
         """解析单个文档并返回纯文本。"""
         if not os.path.exists(path):
             raise ParseError('文件不存在：' + path)
-        return self.resolve_parser(path, logger=logger).parse(path)
+        return self.resolve_parser(path).parse(path)
 
     def chunk_document(
         self,
         path: str,
         text: str,
         nlp: Any = None,
-        logger: Optional[LoggerAdapter] = None,
         max_chars: Optional[int] = None,
         safe_max_chars: Optional[int] = None,
     ) -> List[str]:
         """按文件扩展名派发到该格式的 chunk，规则由各子类自持。"""
         # 长度覆盖来自 parsing 分区，缺省时用解析器自身默认值。
-        parser = self.resolve_parser(path, max_chars, safe_max_chars, logger=logger)
+        parser = self.resolve_parser(path, max_chars, safe_max_chars)
         return parser.chunk(text, nlp=nlp)
 

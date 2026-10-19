@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, List
 
 from rag_data.exceptions import ParseError, ParserDependencyError
-from rag_data.logging.base import LoggerAdapter
 from rag_data.parsers.base import DocumentParser
+
+logger = logging.getLogger(__name__)
 
 PACKAGES = "python-docx"
 INSTALL_HINT = "pip install -e '.[word]'"
@@ -25,8 +27,8 @@ class WordParser(DocumentParser):
 
     SUFFIXES = frozenset({".docx"})
 
-    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000, logger: Optional[LoggerAdapter] = None):
-        super().__init__(max_chars, safe_max_chars, logger)
+    def __init__(self, max_chars: int = 1000, safe_max_chars: int = 2000):
+        super().__init__(max_chars, safe_max_chars)
 
     def parse(self, path: str) -> str:
         """解析 Word：逐段提取文本，不处理标题样式，返回纯文本。"""
@@ -39,8 +41,7 @@ class WordParser(DocumentParser):
         except Exception as exc:  # noqa: BLE001 损坏、加密等统一转为领域异常
             raise ParseError("Word 解析失败：" + path + "：" + str(exc)) from exc
         text = "\n".join(lines)
-        if self.logger is not None:
-            self.logger.info("Word 解析完成", source_path=path, paragraphs=len(lines), chars=len(text))
+        logger.info("Word 解析完成 source_path=%s paragraphs=%s chars=%s", path, len(lines), len(text))
         return text
 
     def chunk(
@@ -74,6 +75,7 @@ def _import_deps() -> Any:
     """导入 python-docx；未安装时给出安装指引。"""
     try:
         import docx
+
     except ImportError as exc:
         raise ParserDependencyError("Word 解析需要 " + PACKAGES + "，请执行 " + INSTALL_HINT) from exc
     return docx.Document

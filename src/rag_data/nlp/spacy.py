@@ -9,9 +9,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
-from rag_data.logging.base import LoggerAdapter
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "zh_core_web_md"
 
@@ -20,7 +21,7 @@ _FAILED = object()
 _PIPELINES: Dict[str, Any] = {}
 
 
-def load_nlp(model_name: str = DEFAULT_MODEL, logger: Optional[LoggerAdapter] = None) -> Optional[Any]:
+def load_nlp(model_name: str = DEFAULT_MODEL) -> Optional[Any]:
     """加载 spaCy 句柄：补 sentencizer 以支持句级切分；未装 spaCy 或模型缺失时返回 None。"""
     cached = _PIPELINES.get(model_name)
     if cached is _FAILED:
@@ -31,20 +32,17 @@ def load_nlp(model_name: str = DEFAULT_MODEL, logger: Optional[LoggerAdapter] = 
         import spacy
     except ImportError:
         _PIPELINES[model_name] = _FAILED
-        if logger is not None:
-            logger.warning("spaCy 未安装，分句与实体抽取将使用回退实现", model=model_name)
+        logger.warning("spaCy 未安装，分句与实体抽取将使用回退实现 model=%s", model_name)
         return None
     try:
         nlp = spacy.load(model_name, disable=["tagger", "ner", "attribute_ruler"])
     except Exception as exc:  # noqa: BLE001 模型缺失或加载失败均降级
         _PIPELINES[model_name] = _FAILED
-        if logger is not None:
-            logger.warning("spaCy 模型加载失败，将使用回退实现", model=model_name, error=str(exc))
+        logger.warning("spaCy 模型加载失败，将使用回退实现 model=%s error=%s", model_name, exc)
         return None
     ensure_sentence_boundaries(nlp)
     _PIPELINES[model_name] = nlp
-    if logger is not None:
-        logger.info("spaCy 模型加载完成", model=model_name, pipes=list(nlp.pipe_names))
+    logger.info("spaCy 模型加载完成 model=%s pipes=%s", model_name, list(nlp.pipe_names))
     return nlp
 
 

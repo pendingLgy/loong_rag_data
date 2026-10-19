@@ -5,13 +5,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 
 from rag_data.storage.db.registry_db import register_db
 from rag_data.storage.db.schema import HistoryRecord, Message
-
-if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.logging.base import LoggerAdapter
 
 
 class BaseDB(ABC):
@@ -28,8 +25,6 @@ class BaseDB(ABC):
             # 直接登记类对象，避免本地类因 qualname 无法按路径导入。
             register_db(name, cls)
 
-    def __init__(self, logger: Optional[LoggerAdapter] = None) -> None:
-        self._logger = logger
 
     # ---------------- 历史记录 ----------------
 
