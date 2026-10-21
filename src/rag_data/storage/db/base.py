@@ -7,6 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import ClassVar, Dict, List, Optional
 
+from rag_data.exceptions import StorageError
 from rag_data.storage.db.registry_db import register_db
 from rag_data.storage.db.schema import HistoryRecord, Message
 
@@ -55,6 +56,13 @@ class BaseDB(ABC):
     @abstractmethod
     def reset(self) -> None:
         """清空所有表。"""
+
+    def drop_tables(self, names: List[str]) -> List[str]:
+        """按名删除数据表：仅允许集成测试前缀的表，返回实际删除的表名。
+
+        默认实现直接拒绝；SQL 实现在 SQLDatabase 中覆盖为真删除。
+        """
+        raise StorageError("当前数据库实现不支持按名删表：" + ", ".join(str(name) for name in names))
 
     @abstractmethod
     def close(self) -> None:

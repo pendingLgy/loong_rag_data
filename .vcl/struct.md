@@ -82,6 +82,7 @@ rag-data/
 │     │  ├─ prompts.py           抽取提示词常量与渲染函数
 │     │  └─ models.py            MemoryItem、AddResult、SearchResult 等数据对象
 │     ├─ storage/
+│     │  ├─ guard.py             删除类操作的前缀守卫（autotest_ 前缀）
 │     │  ├─ db/
 │     │  │  ├─ __init__.py          汇总导出接口、装配函数与数据对象
 │     │  │  ├─ base.py              BaseDB 抽象接口与自动登记
@@ -456,7 +457,7 @@ build_database → SQLiteDB / MySQLDB / PGDB → SQLDatabase（SQLAlchemy Core�
 | history | id（主键）、memory_id（BIGINT，可空，ix_history_memory_id）、old_memory、new_memory、event、created_at、updated_at、is_deleted、actor_id、role |
 | messages | id（主键）、session_scope、role、content、name、created_at，ix_messages_scope_created 为 session_scope 与 created_at 的复合索引 |
 
-SQLDatabase 的公开方法：add_history、batch_add_history、get_history、save_messages、get_last_messages、reset、close；私有辅助：_record_row、_to_record、_message_row、_to_message、_evict_stmt。
+SQLDatabase 的公开方法：add_history、batch_add_history、get_history、save_messages、get_last_messages、reset、drop_tables、close；私有辅助：_record_row、_to_record、_message_row、_to_message、_evict_stmt。
 
 建表与生命周期：__init__ 打开引擎后检查表是否存在，缺失的才创建（已存在不动）；save_messages 按 session_scope 归组，仅保留每会话最近 keep_last 条；支持 with 上下文管理，close 释放引擎。
 
@@ -482,14 +483,14 @@ build_vector_engine → VectorEngine → VectorStoreBase
 | milvus_store.py | MilvusVectorStore：集合与索引 |
 | pg_store.py | PGVectorStore：建表与索引，DDL 辅助函数 |
 
-VectorStoreBase 抽象方法：create_col、insert、search、delete、update、get、list_cols、delete_col、col_info、list、reset；keyword_search 默认返回 None。约定 search 返回的 score 越大越相似（COSINE 用 1 减距离、L2 取 1 加距离的倒数、IP 用内积）；list 与 get 等无排序场景 score 为 None。
+VectorStoreBase 抽象方法：create_col、insert、search、delete、update、get、list_cols、delete_col、col_info、list、reset；keyword_search 默认返回 None；另有具体方法 drop_table(name=None) 与可覆盖的 _drop_col(name)，仅放行 autotest_ 前缀的表。约定 search 返回的 score 越大越相似（COSINE 用 1 减距离、L2 取 1 加距离的倒数、IP 用内积）；list 与 get 等无排序场景 score 为 None。
 
 | 后端 | 建集合或建表 | 索引 |
 | :--- | :--- | :--- |
 | milvus | 单一 schema：id、vectors、metadata、text（开启分析器）、sparse（由 BM25 函数按 text 生成） | vector_index（AUTOINDEX）、sparse_index（SPARSE_INVERTED_INDEX，BM25） |
 | pg | CREATE TABLE IF NOT EXISTS：id、vector vector(维度)、payload JSONB；另有 table_ddl 等 DDL 辅助函数 | HNSW（默认）或 DiskANN（需 vectorscale，缺失回退 HNSW，维度大于 2000 时跳过）；全文 GIN 索引与 keyword_search 表达式一致 |
 
-VectorEngine：属性 store、backend、collection_name、vector_size；写入 insert、update、delete；检索 search、keyword_search、get、list；维护 list_cols、col_info、reset、delete_col、close，支持 with 上下文管理。写入与检索前校验维度与批量长度，不一致抛 StorageError；默认检索条数取 default_top_k（来自 vector.top_k）。
+VectorEngine：属性 store、backend、collection_name、vector_size；写入 insert、update、delete；检索 search、keyword_search、get、list；维护 list_cols、col_info、reset、delete_col、drop_table、close，支持 with 上下文管理。写入与检索前校验维度与批量长度，不一致抛 StorageError；默认检索条数取 default_top_k（来自 vector.top_k）。
 
 build_vector_engine(settings) 按 settings.backend 组装参数：集合名、维度、度量类型固定注入；连接参数按后端从 milvus 或 pg 分区取，留空字段不下传（交由实现自身默认值）。
 

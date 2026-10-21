@@ -35,7 +35,7 @@ SECTION_TWO = (
 
 pytestmark = pytest.mark.integration
 
-if ["--integration","--skip"] not in sys.argv:
+if "--integration" not in sys.argv:
     pytest.skip(
         f"[SKIP INFO] File {__file__}，integration 集成测试默认跳过",
         allow_module_level=True,

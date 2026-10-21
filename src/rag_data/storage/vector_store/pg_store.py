@@ -1,5 +1,4 @@
 # PostgreSQL（pgvector）向量库实现：表即集合，向量列配合 jsonb 元数据。
-#
 # 优先使用 psycopg3，缺失时回退 psycopg2；缺库时仅在实例化时报错。
 
 from __future__ import annotations
@@ -9,6 +8,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
+from rag_data.storage.guard import ensure_test_table
 from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, VectorStoreResult
 
 try:
@@ -26,9 +26,13 @@ except ImportError as _exc:
         _PSYCOPG_VERSION = 0
         _PSYCOPG_ERROR = _exc2
 
-# 斜杠常量：避免在源码中书写易被工具误判的连续斜杠字面量。
-_SLASH = chr(47)
-_SLASH2 = chr(47) * 2
+# -------------------- 具名常量定义 --------------------
+
+# DiskANN 索引仅在维度较小且已安装 vectorscale 扩展时使用。
+DISKANN_MAX_DIMENSION = 2000
+
+# 全文检索表达式：直接使用标准 SQL 字符串，保证 GIN 索引与 keyword_search 完美契合命中索引。
+_TEXT_VECTOR = "to_tsvector('simple', payload->>'text_lemmatized')"
 
 # 支持的操作符到 SQL 片段与是否数值化的映射。
 OPERATOR_SQL_MAP: Dict[str, Any] = {
@@ -99,21 +103,6 @@ def _build_filter_conditions(filters: Optional[Dict[str, Any]]) -> Any:
     return conditions, params
 
 
-
-
-
-# 符号常量：避免在源码中书写尖括号与单引号字面量。
-_SQ = chr(39)  # 单引号
-_ARROW = chr(45) + chr(62) + chr(62)  # 结构体取字段指向符
-
-# 全文检索表达式：GIN 索引与 keyword_search 共用，确保索引可被命中。
-_TEXT_VECTOR = "to_tsvector(" + _SQ + "simple" + _SQ + ", payload" + _ARROW + _SQ + "text_lemmatized" + _SQ + ")"
-
-# DiskANN 索引仅在维度较小且已安装 vectorscale 扩展时使用。
-_DISKANN_MAX_DIM = 2000
-
-
-
 def table_ddl(name: str, vector_size: int) -> str:
     """建表语句：id 主键、vector 向量列、payload 存 jsonb 元数据。"""
     return "CREATE TABLE IF NOT EXISTS " + name + " (id TEXT PRIMARY KEY, vector vector(" + str(vector_size) + "), payload JSONB)"
@@ -165,8 +154,9 @@ class PGVectorStore(VectorStoreBase):
         if connection_string:
             self.connection_string = connection_string
         else:
+            # self.connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
             self.connection_string = (
-                "postgresql:" + _SLASH2 + "{user}:{password}@{host}:{port}" + _SLASH + "{database}"
+                "postgresql://{user}:{password}@{host}:{port}/{database}"
             ).format(user=user, password=password, host=host, port=port, database=database)
         self.collection_name = collection_name
         self.vector_size = vector_size
@@ -214,16 +204,15 @@ class PGVectorStore(VectorStoreBase):
 
     def create_col(self, name: str, vector_size: int, distance: MetricType = "COSINE") -> None:
         """建表并初始化向量索引与全文索引；重复调用安全。"""
+        safe_name = self._col()
         with self._cursor(commit=True) as cursor:
-            # 向量扩展：pgvector 必需；vectorscale 仅在启用 DiskANN 时探测。
             cursor.execute('CREATE EXTENSION IF NOT EXISTS vector')
-            cursor.execute(table_ddl(name, vector_size))
-            if self.use_diskann and vector_size < _DISKANN_MAX_DIM and _extension_installed(cursor, 'vectorscale'):
-                cursor.execute(diskann_index_ddl(name))
+            cursor.execute(table_ddl(safe_name, vector_size))
+            if self.use_diskann and vector_size < DISKANN_MAX_DIMENSION and _extension_installed(cursor, 'vectorscale'):
+                cursor.execute(diskann_index_ddl(safe_name))
             elif self.use_hnsw:
-                cursor.execute(hnsw_index_ddl(name))
-            # 全文索引：与 keyword_search 的查询表达式一致，确保可被命中。
-            cursor.execute(text_index_ddl(name))
+                cursor.execute(hnsw_index_ddl(safe_name))
+            cursor.execute(text_index_ddl(safe_name))
 
     def list_cols(self) -> List[str]:
         with self._cursor() as cursor:
@@ -231,8 +220,9 @@ class PGVectorStore(VectorStoreBase):
             return [row[0] for row in cursor.fetchall()]
 
     def delete_col(self) -> None:
+        target = ensure_test_table(self._col())
         with self._cursor(commit=True) as cursor:
-            cursor.execute('DROP TABLE IF EXISTS ' + self._col())
+            cursor.execute('DROP TABLE IF EXISTS ' + target)
 
     def col_info(self) -> Dict[str, Any]:
         count_sql = 'SELECT COUNT(*) FROM ' + self._col()
@@ -275,13 +265,14 @@ class PGVectorStore(VectorStoreBase):
         _ts = _TEXT_VECTOR
         conditions, params = _build_filter_conditions(filters)
         extra = ' AND ' + ' AND '.join(conditions) if conditions else ''
+        query_expression = query.replace(" ", " | ")
         sql = (
-            'SELECT id, ts_rank_cd(' + _ts + ", plainto_tsquery('simple', %s)) AS score, payload FROM " + self._col()
-            + ' WHERE ' + _ts + " @@ plainto_tsquery('simple', %s)" + extra + ' ORDER BY score DESC LIMIT %s'
+            'SELECT id, ts_rank_cd(' + _ts + ", to_tsquery('simple', %s)) AS score, payload FROM " + self._col()
+            + ' WHERE ' + _ts + " @@ to_tsquery('simple', %s)" + extra + ' ORDER BY score DESC LIMIT %s'
         )
         try:
             with self._cursor() as cursor:
-                cursor.execute(sql, (query, query, *params, top_k))
+                cursor.execute(sql, (query_expression, query_expression, *params, top_k))
                 rows = cursor.fetchall()
         except Exception:
             return None

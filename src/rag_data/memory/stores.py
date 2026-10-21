@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from rag_data.exceptions import StorageError
+from rag_data.nlp.lemmatization import lemmatize_for_bm25, lemmatize_zh_for_bm25
 from rag_data.storage.db.schema import HistoryRecord, Message
 from rag_data.storage.vector_store.base import VectorStoreResult
 
@@ -60,9 +61,12 @@ def to_vector_id_int(vector_id: Any) -> Optional[int]:
 def build_payload(text: str, scope: Dict[str, Any], created_at: Optional[str] = None) -> Dict[str, Any]:
     """组装写入 payload：核心键由本函数负责，作用域由 scope 提供。"""
     stamp = created_at or now_iso()
+
+    query_lemmatized = lemmatize_zh_for_bm25(keyword_text(text))
+
     payload: Dict[str, Any] = {
         "data": text,
-        "text_lemmatized": keyword_text(text),
+        "text_lemmatized": query_lemmatized,
         "hash": memory_hash(text),
         "created_at": stamp,
         "updated_at": stamp,
@@ -264,8 +268,10 @@ class MemoryStore:
 
         if self.supports_keyword:
             keyword_query = keyword_text(query)
+            query_lemmatized = lemmatize_zh_for_bm25(keyword_query)
+
             try:
-                keyword = self.vector.keyword_search(keyword_query, top_k=top_k, filters=filters) or []
+                keyword = self.vector.keyword_search(query=query_lemmatized, top_k=top_k, filters=filters) or []
             except Exception as exc:
                 self._warn("关键词检索失败，仅用语义结果", error=str(exc))
                 keyword = []

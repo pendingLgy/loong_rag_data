@@ -340,6 +340,7 @@ print(create_table_sql('sqlite'))   # 取该方言的建表 SQL（文本）
 | get_history(memory_id) | 按 memory_id 取历史，按时间升序 |
 | save_messages(messages, keep_last=10) | 按 session_scope 归组写入，仅保留每会话最近 keep_last 条 |
 | get_last_messages(session_scope, limit=10) | 取会话最近消息 |
+| drop_tables(names) | 按名删除表；只放行 autotest_ 前缀的集成测试表，返回实际删除的表名 |
 | reset() / close() | 清空重建 / 释放引擎；支持 with 上下文管理 |
 
 ```python
@@ -403,9 +404,9 @@ print(text_index_ddl('autotest_vector'))
 | 属性 | store、backend、collection_name、vector_size |
 | 写入 | insert(vectors, payloads=None, ids=None) 返回写入条数、update(vector_id, vector=None, payload=None)、delete(vector_id) |
 | 检索 | search(query, vectors, top_k=None, filters=None)、keyword_search(query, top_k=None, filters=None)、get(vector_id)、list(filters=None, top_k=None) |
-| 维护 | list_cols()、col_info()、reset()、delete_col()、close()，支持 with 上下文管理 |
+| 维护 | list_cols()、col_info()、reset()、delete_col()、drop_table(name=None)、close()，支持 with 上下文管理 |
 
-引擎在写入与检索前校验维度与批量长度（payloads 与 ids 需与 vectors 等长），不一致抛 StorageError；默认检索条数来自 vector.top_k。
+引擎在写入与检索前校验维度与批量长度（payloads 与 ids 需与 vectors 等长），不一致抛 StorageError；默认检索条数来自 vector.top_k。删表入口 drop_table(name=None) 同样只放行 autotest_ 前缀的集成测试表，不满足即抛 StorageError。
 
 ```python
 from rag_data.config import VectorSettings

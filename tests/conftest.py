@@ -64,7 +64,7 @@ MYSQL_JSON = r"""
 
 SQLITE_JSON = r"""
 {
-  "path": ""
+  "path": "F:\\workspace\\code\\python\\rag-data\\memory.db"
 }
 """
 
@@ -128,7 +128,7 @@ CASES_JSON = r"""
   },
   "facade_memory": {
     "collection": "autotest_memory",
-    "backend": "milvus"
+    "backend": "pg"
   }
 }
 """

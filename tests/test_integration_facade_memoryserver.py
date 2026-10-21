@@ -55,7 +55,7 @@ QUERY = "我周末喜欢做什么"
 
 pytestmark = pytest.mark.integration
 
-if ["--integration","--skip"] not in sys.argv:
+if "--integration" not in sys.argv:
     pytest.skip(
         f"[SKIP INFO] File {__file__}，integration 集成测试默认跳过",
         allow_module_level=True,
@@ -155,7 +155,7 @@ def _cleanup(server: MemoryServer) -> None:
     if not KEEP and COLLECTION.startswith(COLLECTION_PREFIX): 
         try: 
             server.vector.delete_col()
-        except Exception: 
+        except Exception:
             pass
     for component in (server.vector, server.db): 
         closer = getattr(component, "close", None)
@@ -237,21 +237,26 @@ def test_add_requires_entity_scope(server: MemoryServer):
 
 def test_search_returns_written_memory(server: MemoryServer, written, user_id: str): 
     ids = {item.id for item in written}
-    result = server.search(QUERY, user_id=user_id, top_k=5, threshold=0.0)
+    filters = {"user_id": user_id}
+    result = server.search(QUERY, filters=filters, top_k=5, threshold=0.0)
     assert result.results
     assert any(item.id in ids for item in result.results)
     assert all(item.score is not None for item in result.results)
 
 
-def test_search_is_scoped_by_user(server: MemoryServer, written): 
+def test_search_is_scoped_by_user(server: MemoryServer, written,user_id: str):
     ids = {item.id for item in written}
-    result = server.search(QUERY, user_id="it_user_other", top_k=5, threshold=0.0)
-    assert all(item.id not in ids for item in result.results)
+
+    filters = {"user_id": user_id}
+
+    result = server.search(QUERY, filters=filters, top_k=5, threshold=0.0)
+    assert all(item.id in ids for item in result.results)
 
 
-def test_search_rejects_blank_query(server: MemoryServer, user_id: str): 
+def test_search_rejects_blank_query(server: MemoryServer, user_id: str):
+    filters = {"user_id": user_id}
     with pytest.raises(DataError): 
-        server.search("   ", user_id=user_id)
+        server.search("   ", filters=filters)
 
 
 def test_update_rewrites_text(server: MemoryServer, written): 

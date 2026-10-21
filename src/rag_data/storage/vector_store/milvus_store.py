@@ -10,6 +10,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
+from rag_data.storage.guard import ensure_test_table
 from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, VectorStoreResult
 
 try:  # 可选依赖：模块仍可导入，缺库时仅在实例化时报错。
@@ -59,12 +60,19 @@ class MilvusVectorStore(VectorStoreBase):
         """集合 schema：稠密向量、元数据与 BM25 文本及稀疏向量一次建齐。"""
         if Function is None or FunctionType is None:
             raise OptionalDependencyError("BM25 稀疏检索需要 pymilvus>=2.5（含 Function 类型）")
+
+        # 定义中文分析器参数
+        chinese_analyzer_params = {
+            "type": "chinese",
+            "tokenizer": "jieba",
+        }
+
         fields = [
             FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=512),
             FieldSchema(name="vectors", dtype=DataType.FLOAT_VECTOR, dim=vector_size),
             FieldSchema(name="metadata", dtype=DataType.JSON),
             # text 由 Milvus 分析器自动分词，供 BM25 使用。
-            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=_MAX_TEXT_LEN, enable_analyzer=True),
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=_MAX_TEXT_LEN, enable_analyzer=True,analyzer_params=chinese_analyzer_params),
             # sparse 由 BM25 函数按 text 自动生成，稠密检索与关键词检索共用该集合。
             FieldSchema(name="sparse", dtype=DataType.SPARSE_FLOAT_VECTOR),
         ]
@@ -87,7 +95,8 @@ class MilvusVectorStore(VectorStoreBase):
 
     def delete_col(self) -> None:
         """删除当前集合。"""
-        self.client.drop_collection(collection_name=self.collection_name)
+        target = ensure_test_table(self.collection_name)
+        self.client.drop_collection(collection_name=target)
 
     def col_info(self) -> Dict[str, Any]:
         """返回当前集合的统计信息。"""

@@ -117,8 +117,8 @@ testpaths = ["tests"]
 markers = [
   "integration: 集成测试，默认跳过",
 ]
-addopts = "-s -q -rs -m 'not integration'"
-#addopts = "-s -q -rs"
+#addopts = "-s -q -rs -m 'not integration'"
+addopts = "-s -q -rs -m 'integration'"
 log_cli = true
 log_cli_level = "INFO"
 log_cli_format = "%(asctime)s [%(levelname)s] [%(pathname)s:%(funcName)s() %(lineno)d] %(message)s"

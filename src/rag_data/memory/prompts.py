@@ -482,7 +482,7 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 - Extract every piece of memorable information as a separate memory object.
 - If nothing is worth extracting, return: {"memory": []}
 - No duplicate IDs. Use double quotes. No trailing commas.
-
+- All extracted content must be in Chinese.
 """
 
 

@@ -7,13 +7,14 @@ from abc import abstractmethod
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from sqlalchemy import delete, inspect, insert, select
+from sqlalchemy import delete, inspect, insert, select, text
 from sqlalchemy.engine import Engine
 
 from rag_data.exceptions import ConfigError, StorageError
 from rag_data.storage.db.base import BaseDB
 from rag_data.storage.db.schema import HISTORY_TABLE, MESSAGES_TABLE, METADATA, HistoryRecord, Message
 from rag_data.storage.db.snowflake import next_id
+from rag_data.storage.guard import ensure_test_tables
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import DBSettings
@@ -24,7 +25,6 @@ class SQLDatabase(BaseDB):
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.engine: Optional[Engine] = None
         self.engine = self._open_engine()
         self._ensure_schema()
 
@@ -179,6 +179,30 @@ class SQLDatabase(BaseDB):
 
 
     # ---------------- 维护 ----------------
+
+    def drop_tables(self, names: List[str]) -> List[str]:
+        """按名删除数据表：只允许 autotest_ 前缀的集成测试表，返回实际删除的表名。
+
+        表名先整体校验再执行，任一非法即抛 StorageError 且不删除任何表；
+        字符集已由守卫限定为字母、数字与下划线，故按标识符直接拼接。
+        """
+        targets = ensure_test_tables(names)
+        if len(targets) == 0:
+            return []
+        inspector = inspect(self.engine)
+        existing = [name for name in targets if inspector.has_table(name)]
+        if len(existing) == 0:
+            return []
+        dropped: List[str] = []
+        with self._lock:
+            try:
+                with self.engine.begin() as conn:
+                    for name in existing:
+                        conn.execute(text("DROP TABLE IF EXISTS " + name))
+                        dropped.append(name)
+            except Exception as exc:
+                raise StorageError("删表失败" + ": " + str(exc)) from exc
+        return dropped
 
     def reset(self) -> None:
         "删除并重建所有表。"
