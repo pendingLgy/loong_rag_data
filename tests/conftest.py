@@ -10,6 +10,20 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 获取项目根目录（假设 conftest.py 在 tests 目录下，往上找一层是根目录）
+# 如果 conftest.py 直接在根目录，可以根据实际路径调整
+BASE_DIR = Path(__file__).resolve().parent.parent
+env_file = BASE_DIR / ".env_ai_key"
+
+# 显式加载自定义文件名的环境变量
+if env_file.exists():
+    load_dotenv(dotenv_path=env_file)
+else:
+    # 如果在某些特殊 CI 环境，也可以尝试不带路径加载默认的
+    load_dotenv()
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(_PROJECT_ROOT, "src")
@@ -129,6 +143,12 @@ CASES_JSON = r"""
   "facade_memory": {
     "collection": "autotest_memory",
     "backend": "pg"
+  },
+  "rag_eval": {
+    "collection": "autotest_rag_eval",
+    "top_k": 5,
+    "min_recall": 0.8,
+    "min_mrr": 0.5
   }
 }
 """
@@ -156,6 +176,8 @@ CASES_CONFIG = json.loads(CASES_JSON)
 
 PARSING_SETTINGS = ParsingSettings(**PARSING_CONFIG)
 EMBEDDING_SETTINGS = EmbeddingSettings(**EMBEDDING_CONFIG)
+EMBEDDING_SETTINGS.api_key = os.getenv("embedding_api_key","")
+
 LLM_SETTINGS = LLMSettings(**LLM_CONFIG)
 SQLITE_SETTINGS = SQLiteSettings(**SQLITE_CONFIG)
 MYSQL_SETTINGS = MySQLSettings(**MYSQL_CONFIG)
@@ -186,4 +208,10 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="运行真实调用外部服务的集成测试",
+    )
+    parser.addoption(
+        "--eval",
+        action="store_true",
+        default=False,
+        help="评分用例：真实调用 Milvus 与 PG 完成写入与回查",
     )

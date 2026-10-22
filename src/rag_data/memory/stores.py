@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from rag_data.exceptions import StorageError
-from rag_data.nlp.lemmatization import lemmatize_for_bm25, lemmatize_zh_for_bm25
+from rag_data.nlp.lemmatization import lemmatize_zh_for_bm25
 from rag_data.storage.db.schema import HistoryRecord, Message
 from rag_data.storage.vector_store.base import VectorStoreResult
 
