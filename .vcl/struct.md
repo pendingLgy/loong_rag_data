@@ -14,10 +14,10 @@ rag-data 同时提供两条能力线：**解析向量化**（把文件解析为�
 
 | 层 | 包 | 职责 |
 | :--- | :--- | :--- |
-| 配置层 | config.py | 解析侧 `RagSetting`（三分区）与独立 `MemorySettings`，三类来源加载，各分区带 enable 开关 |
+| 配置层 | config.py | 解析侧 `RagSetting`（parsing、embedding 两分区）与独立 `MemorySettings`，三类来源加载，各分区带 enable 开关 |
 | 契约层 | exceptions.py | 领域异常 |
-| 通用设施 | registry.py、logging、nlp | 通用注册表、日志适配层、spaCy 句柄加载与缓存 |
-| 领域服务 | parsers、embedding、llm、memory | 解析切块、向量化、大模型调用、记忆四流程 |
+| 通用设施 | registry.py、nlp | 通用注册表、spaCy 句柄加载与缓存、BM25 词形处理 |
+| 领域服务 | parsers、embedding、llm、memory、eval | 解析切块、向量化、大模型调用、记忆四流程、检索与生成评测 |
 | 存储层 | storage/db、storage/vector_store | 关系库（历史与消息）与向量库（稠密与关键词检索） |
 | 门面层 | facade.py | 两个门面 `RagData`、`MemoryServer` 与私有装配方法 `_build_*` |
 | 公共入口 | __init__.py | 只导出当前目录（直接模块）的公共符号，不含子包 |
@@ -29,8 +29,8 @@ rag-data 同时提供两条能力线：**解析向量化**（把文件解析为�
 ```text
 rag-data/
 ├─ pyproject.toml          构建与依赖声明（hatchling + hatch 环境）
-├─ README.md               使用说明：特性、快速开始、公共 API、配置、各子包、门面
-├─ development.md          开发指南：环境与依赖管理、命令分类、测试与构建
+├─ README.md               使用说明：特性、快速开始、公共 API、配置、各子包与门面；开发相关内容只指向 development.md
+├─ development.md          开发指南：环境与依赖管理、命令分类、测试与集成配置、目录与用例清单、待实现
 ├─ rag_artifact.md         架构设计源文档
 ├─ .vcl/struct.md          本文件：项目结构说明
 ├─ plan/
@@ -39,15 +39,16 @@ rag-data/
 ├─ src/
 │  └─ rag_data/
 │     ├─ __about__.py      版本号（hatch 版本来源）
-│     ├─ __init__.py       包根，仅导出当前目录直接模块的 25 个公共符号
+│     ├─ __init__.py       包根，仅导出当前目录直接模块的 23 个公共符号
 │     ├─ py.typed          类型标记（PEP 561）
-│     ├─ config.py         RagSetting 三分区 + 独立 MemorySettings 与三类来源加载
+│     ├─ config.py         RagSetting（parsing、embedding）+ 独立 MemorySettings 与三类来源加载
 │     ├─ exceptions.py     领域异常层次
 │     ├─ registry.py       通用注册表（Registry、Ref）
 │     ├─ facade.py         门面 RagData、MemoryServer 与私有装配方法 _build_*
 │     ├─ nlp/
 │     │  ├─ __init__.py          汇总导出 DEFAULT_MODEL、load_nlp、clear_cache、ensure_sentence_boundaries
-│     │  └─ spacy.py             spaCy 句柄加载：惰性导入、按模型名缓存（失败也缓存）与清空
+│     │  ├─ spacy.py             spaCy 句柄：load_nlp 与 get_nlp_lemma 双缓存、锁保护、失败也缓存
+│     │  └─ lemmatization.py     BM25 词形：lemmatize_for_bm25 与 lemmatize_zh_for_bm25
 │     ├─ parsers/
 │     │  ├─ __init__.py          汇总导出、默认处理器的绑定方法与句柄加载再导出
 │     │  ├─ base.py              DocumentParser 基类与递归切块原语（句柄加载已抽出）
@@ -77,10 +78,17 @@ rag-data/
 │     │  ├─ __init__.py          汇总导出 MemoryBase、MemoryHandler 与数据对象
 │     │  ├─ base.py              MemoryBase 抽象：add、search、update、delete 四条契约
 │     │  ├─ handler.py           MemoryHandler：流程编排、结果组装与 DEFAULT_* 常量
-│     │  ├─ stores.py            MemoryStore：批量写入、历史审计与失败降级
+│     │  ├─ stores.py            MemoryStore：批量写入、历史审计、失败降级与词形文本组装
 │     │  ├─ scope.py             作用域构造与校验（纯函数，无外部依赖）
 │     │  ├─ prompts.py           抽取提示词常量与渲染函数
 │     │  └─ models.py            MemoryItem、AddResult、SearchResult 等数据对象
+│     ├─ eval/
+│     │  ├─ __init__.py          汇总导出评测入口
+│     │  ├─ rag/
+│     │  │  ├─ __init__.py          汇总导出 RAG 评测符号
+│     │  │  ├─ dataset.py           RAGTestCase 与 RAG_GOLDEN_DATASET 黄金数据集
+│     │  │  ├─ metrics.py           Recall@K、MRR 与关键词覆盖率纯函数
+│     │  │  └─ evaluator.py         RAGEvaluator：检索与生成评测执行器
 │     ├─ storage/
 │     │  ├─ guard.py             删除类操作的前缀守卫（autotest_ 前缀）
 │     │  ├─ db/
@@ -102,7 +110,7 @@ rag-data/
 │     │     └─ pg_store.py          PGVectorStore（建表与索引）
 │     └─ util/               空目录（仅 __pycache__），待清理
 └─ tests/
-├─ conftest.py                     路径注入、settings 夹具、--integration 选项、集成配置解析（JSON 拆为各 Settings 对象）
+├─ conftest.py                     路径注入、settings 夹具、--integration 与 --eval 选项、集成配置解析（分区 JSON 拆为各 Settings 对象）
    ├─ test_config.py        RagSetting 与 MemorySettings 的分区、三类来源与 enable
    ├─ test_facade.py        模块级装配方法与 facade 公开契约
    ├─ test_facade_ragdata.py RagData 构造、解析与切块
@@ -110,9 +118,13 @@ rag-data/
    ├─ test_parsers_*.py     各格式契约、解析与切块、派发与注册表
    ├─ test_embedding.py     向量化注册表、内置 embedder 与 EmbedderHandler
    ├─ test_llm.py           大模型注册表、内置 provider 与 LLMHandler
+   ├─ test_rag_eval.py      RAG 评测：指标与执行器单测，真实向量库与大模型集成
    ├─ test_db.py            关系库注册表、表结构与 SQLite 端到端、MySQL 与 PG 集成
    ├─ test_vector_store.py  向量库注册表、DDL、引擎，以及真实服务集成
    ├─ test_integration_qwen_epub_milvus.py  真实 EPUB 到 Milvus 端到端
+   ├─ test_epub_to_milvus_and_pg.py  EPUB 解析向量化后同时写入 Milvus 与 PG（只做插入与回查）
+   ├─ test_spacy.py         spaCy 分词与词形探索性用例
+   ├─ test_milvus_spacy_nlp.py  Milvus BM25 与 NLP 分析器匹配度集成
    ├─ test_integration_facade_ragdata.py    RagData 集成：真实解析与切块
    └─ test_integration_facade_memoryserver.py  MemoryServer 集成：四条流程
 ```
@@ -130,11 +142,12 @@ __init__（包根，仅导出直接模块符号）
      ▲
 facade（两个门面：RagData 解析、MemoryServer 记忆）
      ├── config            RagSetting 与 MemorySettings 及三类来源加载
-     ├── nlp               spaCy 句柄加载与缓存（parsers 与 facade 共用）
+     ├── nlp               spaCy 句柄加载与缓存、BM25 词形处理（parsers、memory 与 facade 共用）
      ├── parsers           文档解析与切块（ParserHandler）
      ├── embedding         向量化（EmbedderHandler）
      ├── llm               大模型（LLMHandler）
      ├── memory            记忆四流程（MemoryHandler → MemoryStore）
+     ├── eval              检索与生成评测（RAGEvaluator，按需构造，不入门面）
      ├── storage/db        关系库（build_database）
      └── storage/vector_store  向量库（build_vector_engine）
 ```
@@ -147,7 +160,8 @@ facade（两个门面：RagData 解析、MemoryServer 记忆）
 4. 包根只导出当前目录直接模块的公共符号，不跨模块、不列子包
 5. config 的 YAML 来源由 _import_yaml 惰性导入 PyYAML，缺失时抛 OptionalDependencyError
 6. memory 只依赖抽象基类与 engine（BaseDB、VectorEngine、EmbedderHandler、LLMHandler），不 import 具体方言实现，也不自建连接
-7. nlp 不反向依赖 parsers 或 facade：只提供句柄，不含业务逻辑
+7. nlp 不反向依赖 parsers 或 facade：只提供句柄与词形函数，不含业务逻辑
+8. eval 不入门面：只依赖向量引擎与大模型入口，由调用方按需构造
 
 ---
 
@@ -274,21 +288,23 @@ class Registry(dict):
 
 ### 4.7 nlp/（spaCy 句柄）
 
-从解析器基类抽出，供解析器与两个门面共用；只做句柄加载与缓存，不含切块逻辑。
+从解析器基类抽出，供解析器、记忆层与两个门面共用；只做句柄加载、缓存与词形处理，不含切块逻辑。
 
 | 符号 | 说明 |
 | :--- | :--- |
 | `DEFAULT_MODEL` | 默认模型名 `zh_core_web_md` |
-| `load_nlp(model_name=DEFAULT_MODEL)` | 加载句柄；不可用时返回 `None` 并告警 |
-| `clear_cache()` | 清空缓存（含失败记录），供测试或运行时重建 |
+| `load_nlp(model_name=DEFAULT_MODEL)` | 加载完整管线（不 disable 组件），完成后补句边界；不可用时返回 `None` 并告警 |
+| `get_nlp_lemma(model_name=DEFAULT_MODEL)` | 加载词形管线（只 disable ner 与 parser），供 BM25 词形处理使用 |
+| `clear_cache()` | 清空主缓存（含失败记录），供测试或运行时重建；lemma 缓存当前未清，见第 13 节 |
 | `ensure_sentence_boundaries(nlp)` | 缺 parser 与 sentencizer 时补一个 sentencizer |
 
 行为要点：
 
 1. 惰性 `import spacy`，未安装则缓存失败哨兵并返回 `None`；
-2. 加载时 `disable=[tagger, ner, attribute_ruler]`，完成后补句边界；
+2. `_PIPELINES` 与 `_PIPELINES_LEMMA` 两套缓存共用一把 `threading.Lock`：读路径先查缓存，写路径做双重检查；
 3. 成功与失败都写入缓存，避免逐次重试拖慢批量导入；
-4. 文件与第三方包同名，但 Python 3 只做绝对导入，函数内 `import spacy` 仍解析到第三方包。
+4. `lemmatization.py` 提供两个纯函数：`lemmatize_for_bm25` 做英文小写与词形还原（并追加 -ing 原词），`lemmatize_zh_for_bm25` 不做小写，保留下划线与连字符组成的复合标识符并过滤标点与停用词；spaCy 不可用时均原样返回输入；
+5. 文件与第三方包同名，但 Python 3 只做绝对导入，函数内 `import spacy` 仍解析到第三方包。
 
 解析器基类已移除句柄加载实现与 `load_nlp`、`clear_cache` 类方法，仅按旧路径再导出这三个符号以兼容既有引用；parsers 子包也额外导出 `DEFAULT_MODEL`、`load_nlp`、`clear_cache`。
 
@@ -397,7 +413,7 @@ MemoryHandler → MemoryStore → VectorEngine（向量读写）
 | :--- | :--- | :--- |
 | base.py | MemoryBase | 抽象契约：add、search、update、delete |
 | handler.py | MemoryHandler、DEFAULT_* | 流程编排与结果组装；四条流程均同步阻塞 |
-| stores.py | MemoryStore、build_payload、split_payload、memory_hash、keyword_text、now_iso、to_vector_id、to_vector_id_int | 向量库与关系库的薄封装，统一 id 转换、payload 布局与失败降级 |
+| stores.py | MemoryStore、build_payload、split_payload、memory_hash、keyword_text、now_iso、to_vector_id、to_vector_id_int | 向量库与关系库的薄封装，统一 id 转换、payload 布局与失败降级；写入侧词形文本由 lemmatize_zh_for_bm25 生成 |
 | scope.py | validate_entity_id、strip_identity_keys、build_scope、session_scope、validate_search_params、validate_query、escape_scope_value、ENTITY_PARAMS、IDENTITY_KEYS | 作用域构造与校验，纯函数无外部依赖 |
 | prompts.py | ADDITIVE_EXTRACTION_PROMPT、AGENT_CONTEXT_SUFFIX、PAST_MESSAGE_TRUNCATION_LIMIT、generate_additive_extraction_prompt | 抽取提示词与渲染函数 |
 | models.py | MemoryItem、AddResult、SearchResult、UpdateResult、DeleteResult | pydantic 数据对象（extra 为 ignore） |
@@ -406,8 +422,8 @@ MemoryHandler(settings, embedder=None, llm=None, db=None, vector=None)：四个�
 
 | 公共方法 | 职责 |
 | :--- | :--- |
-| add(messages, **scope) | 归一消息 → 召回既有记忆去重 → 大模型抽取事实 → 嵌入并写向量库、历史与消息 |
-| search(query, **filters) | 语义与关键词双路召回，融合打分后按阈值过滤、条数截断并格式化 |
+| add(messages, *, user_id=None, agent_id=None, run_id=None, metadata=None) | 归一消息 → 召回既有记忆去重 → 大模型抽取事实 → 嵌入并写向量库、历史与消息 |
+| search(query, *, filters=None, top_k=None, threshold=None) | 语义与关键词双路召回（关键词路径用 lemmatize_zh_for_bm25 处理查询串），融合打分后按阈值过滤、条数截断并格式化 |
 | update(memory_id, text=None, metadata=None) | 合并 payload；正文变化时才重算向量；写向量库并记 UPDATE 历史 |
 | delete(memory_id) | 向量库物理删除，历史表软删（`is_deleted=1`）留审计 |
 
@@ -427,7 +443,32 @@ MemoryHandler(settings, embedder=None, llm=None, db=None, vector=None)：四个�
 2. payload 固定核心键（正文、词形文本、hash、时间戳、作用域），其余键原样保留为业务元数据；`hash` 取正文 MD5 用于去重；
 3. 写入顺序为先向量库后历史：向量库是检索的事实来源，历史表是审计；
 4. 降级边界：写历史失败、存消息失败、关键词检索不支持、抽取响应非 JSON 均只告警不中断；嵌入与向量写入失败则抛 `EmbeddingError` 或 `StorageError`；
-5. 身份键（user_id、agent_id、run_id、actor_id）只从显式参数进入，metadata 中的同名字段一律剥离。
+5. 身份键（user_id、agent_id、run_id、actor_id）只从显式参数进入，metadata 中的同名字段一律剥离；
+6. 关键词检索的写入侧与查询侧统一走 `lemmatize_zh_for_bm25`，但 update 路径的 `_merge_payload` 仍用 `keyword_text`，两侧暂不一致，见第 13 节。
+
+### 5.5 eval（检索与生成评测）
+
+```text
+RAG_GOLDEN_DATASET ─→ RAGEvaluator ─→ VectorEngine（关键词单路或语义加关键词 RRF）
+                            └→ LLMHandler（生成评分）
+```
+
+| 文件 | 关键符号 | 说明 |
+| :--- | :--- | :--- |
+| dataset.py | RAGTestCase、RAG_GOLDEN_DATASET | 用例为 dataclass（query、expected_doc_ids、expected_keywords），构造时去空白与空项；黄金集含 3 条 |
+| metrics.py | calculate_recall_at_k、calculate_mrr、calculate_keyword_coverage | 纯函数：真 Recall（命中数除以期望数）、单条倒数排名、大小写不敏感的关键词覆盖率 |
+| evaluator.py | RAGEvaluator、DEFAULT_TOP_K、RRF_K、SCORE_MIN、SCORE_MAX、DEFAULT_SCORE | 检索、关键词覆盖率与生成评分执行器 |
+
+RAGEvaluator(vector_engine, llm_handler=None, embedder=None)：
+
+| 方法 | 职责 |
+| :--- | :--- |
+| evaluate_retrieval(test_cases, top_k=5) | 返回 recall@K 与 mrr@K，各用例等权平均；空序列返回 0.0 |
+| evaluate_keyword_coverage(test_cases, top_k=5) | 返回 keyword@K，正文取 payload 的 data、text 或 text_lemmatized |
+| evaluate_generation(query, context, answer) | 调大模型打分，返回 faithfulness 与 relevance，越界收敛到 1 到 5 |
+| _retrieve、_fuse、_result_id、_texts_of、_parse_scores、_clamp、_validate_* | 内部实现：无 embedder 走 keyword_search 单路；有 embedder 走语义加关键词 RRF 融合；结果 id 优先取 payload 的 doc_id |
+
+异常语义：缺大模型抛 `ConfigError`，入参非法抛 `DataError`，传输层失败抛 `LLMError`（不把网络故障静默记成默认分）。
 
 ---
 
@@ -441,7 +482,7 @@ build_database → SQLiteDB / MySQLDB / PGDB → SQLDatabase（SQLAlchemy Core�
 
 | 文件 | 内容 |
 | :--- | :--- |
-| base.py | BaseDB 抽象接口：声明 backend 即自动登记，无状态、无构造参数 |
+| base.py | BaseDB 抽象接口：声明 backend 即自动登记，无状态、无构造参数；drop_tables 为具体方法，默认抛 StorageError |
 | registry_db.py | 纯注册表（BUILTIN_DBS：sqlite、mysql、pg）与注册、解析函数 |
 | db_engine.py | SQLDatabase 通用实现与 build_database 装配函数 |
 | schema.py | METADATA、HISTORY_TABLE、MESSAGES_TABLE、CREATE_SQL、create_table_sql、HistoryRecord、Message |
@@ -458,6 +499,8 @@ build_database → SQLiteDB / MySQLDB / PGDB → SQLDatabase（SQLAlchemy Core�
 | messages | id（主键）、session_scope、role、content、name、created_at，ix_messages_scope_created 为 session_scope 与 created_at 的复合索引 |
 
 SQLDatabase 的公开方法：add_history、batch_add_history、get_history、save_messages、get_last_messages、reset、drop_tables、close；私有辅助：_record_row、_to_record、_message_row、_to_message、_evict_stmt。
+
+drop_tables(names) 先过 storage 的 guard 模块（只放行 autotest_ 前缀、字符集限 A-Za-z0-9_），再用 inspect 过滤存在的表并逐条 DROP TABLE IF EXISTS，返回实际删除的表名；空输入或表全不存在返回空列表，任一表名非法即整体抛 StorageError。内置的 history 与 messages 不带前缀，清空走 reset。
 
 建表与生命周期：__init__ 打开引擎后检查表是否存在，缺失的才创建（已存在不动）；save_messages 按 session_scope 归组，仅保留每会话最近 keep_last 条；支持 with 上下文管理，close 释放引擎。
 
@@ -480,17 +523,17 @@ build_vector_engine → VectorEngine → VectorStoreBase
 | base.py | VectorStoreBase 抽象、VectorStoreResult、MetricType（COSINE、L2、IP） |
 | registry_vector.py | 纯注册表（BUILTIN_STORES：milvus、pg）与注册、解析函数 |
 | vector_engine.py | build_vector_store、VectorEngine、build_vector_engine、_backend_kwargs |
-| milvus_store.py | MilvusVectorStore：集合与索引 |
-| pg_store.py | PGVectorStore：建表与索引，DDL 辅助函数 |
+| milvus_store.py | MilvusVectorStore：集合与索引；text 字段配 chinese 分析器（jieba 分词），sparse 由 BM25 函数按 text 生成 |
+| pg_store.py | PGVectorStore：建表与索引、DDL 辅助函数；全文 GIN 表达式与 keyword_search 一致，删表前过 guard |
 
-VectorStoreBase 抽象方法：create_col、insert、search、delete、update、get、list_cols、delete_col、col_info、list、reset；keyword_search 默认返回 None；另有具体方法 drop_table(name=None) 与可覆盖的 _drop_col(name)，仅放行 autotest_ 前缀的表。约定 search 返回的 score 越大越相似（COSINE 用 1 减距离、L2 取 1 加距离的倒数、IP 用内积）；list 与 get 等无排序场景 score 为 None。
+VectorStoreBase 抽象方法：create_col、insert、search、delete、update、get、list_cols、delete_col、col_info、list、reset；keyword_search 默认返回 None；另有具体方法 drop_table(name=None) 与可覆盖的 _drop_col(name)，仅放行 autotest_ 前缀的表；两个后端的 delete_col 同样先过 guard，非 autotest_ 集合名直接抛 StorageError。约定 search 返回的 score 越大越相似（COSINE 用 1 减距离、L2 取 1 加距离的倒数、IP 用内积）；list 与 get 等无排序场景 score 为 None。
 
 | 后端 | 建集合或建表 | 索引 |
 | :--- | :--- | :--- |
-| milvus | 单一 schema：id、vectors、metadata、text（开启分析器）、sparse（由 BM25 函数按 text 生成） | vector_index（AUTOINDEX）、sparse_index（SPARSE_INVERTED_INDEX，BM25） |
+| milvus | 单一 schema：id、vectors、metadata、text（开启分析器，chinese 类型加 jieba 分词）、sparse（由 BM25 函数按 text 生成） | vector_index（AUTOINDEX）、sparse_index（SPARSE_INVERTED_INDEX，BM25） |
 | pg | CREATE TABLE IF NOT EXISTS：id、vector vector(维度)、payload JSONB；另有 table_ddl 等 DDL 辅助函数 | HNSW（默认）或 DiskANN（需 vectorscale，缺失回退 HNSW，维度大于 2000 时跳过）；全文 GIN 索引与 keyword_search 表达式一致 |
 
-VectorEngine：属性 store、backend、collection_name、vector_size；写入 insert、update、delete；检索 search、keyword_search、get、list；维护 list_cols、col_info、reset、delete_col、drop_table、close，支持 with 上下文管理。写入与检索前校验维度与批量长度，不一致抛 StorageError；默认检索条数取 default_top_k（来自 vector.top_k）。
+VectorEngine：属性 store、backend、collection_name、vector_size；写入 insert、update、delete；检索 search、keyword_search、get、list；维护 list_cols、col_info、reset、delete_col、close，支持 with 上下文管理；按名删表走 store 的 drop_table(name=None)，引擎层未再包一层。写入与检索前校验维度与批量长度，不一致抛 StorageError；默认检索条数取 default_top_k（来自 vector.top_k）。
 
 build_vector_engine(settings) 按 settings.backend 组装参数：集合名、维度、度量类型固定注入；连接参数按后端从 milvus 或 pg 分区取，留空字段不下传（交由实现自身默认值）。
 
@@ -536,7 +579,7 @@ MemoryServer(settings: MemorySettings)
 
 | 成员 | 说明 |
 | :--- | :--- |
-| settings、logger、embedder、db、vector、llm | 构造后挂载的实例变量；未注入且对应分区关闭时为 None |
+| settings、embedder、llm、db、vector | 构造后挂载的实例变量；对应分区关闭时为 None；handler 即 MemoryHandler 实例 |
 | handler（属性 memory） | MemoryHandler 实例；memory.enable 为 False 时为 None |
 | add / search / update / delete | 四条流程代理，未启用时经 _require() 抛 ConfigError |
 
@@ -563,7 +606,7 @@ facade 的 __all__ 含 RagData 与 MemoryServer。
 ### 8.1 文件向量化
 
 ```text
-1. RagData(settings)                装配 settings、logger、nlp、embedder（按 enable 门控）
+1. RagData(settings)                装配 settings、parser、nlp、embedder（按 enable 门控）
 2. app.parse_document(path)         解析文件为纯文本
 3. app.chunk_document(path, text)   按格式切块（ParserHandler 派发）
 4. app.embedder.encode(chunks)      分块编码为稠密向量
@@ -593,7 +636,7 @@ app.vector.search(query, vector, top_k)      稠密检索；keyword_search 走 B
 ```text
 MemoryServer(settings)                          按各分区 enable 装配 embedding、llm、db、vector
     ├─ add(messages, user_id=...)             抽取事实并写入向量库、历史与消息
-    ├─ search(query, user_id=...)             双路召回并融合排序
+    ├─ search(query, filters=...)             双路召回并融合排序
     ├─ update(memory_id, text=...)            改正文或元数据，必要时重算向量
     └─ delete(memory_id)                      向量库物理删除、历史表软删
 ```
@@ -693,8 +736,8 @@ class LocalEmbedder(BaseEmbedder):
 下表为各文件的 `def test_` 静态计数（不含 pytest 参数化展开，也未运行 pytest 核对）：
 
 ```text
-tests（静态统计 402 项 def test_；其中模块级标记 integration 的五个文件合计 165 项）
-├─ conftest.py                     路径注入、settings 夹具、--integration 选项、集成配置解析
+tests（静态统计 447 项 def test_；整文件标记 integration 的 6 个文件合计 168 项，整文件标记 eval 的 1 个文件 2 项，test_rag_eval.py 内另有 2 项单独标记 integration）
+├─ conftest.py                     路径注入、settings 夹具、--integration 与 --eval 选项、分区 JSON 拆为 Settings 对象
 ├─ test_config.py           56 项  RagSetting 与 MemorySettings 的分区、三类来源与 enable
 ├─ test_facade.py          16 项  模块级装配方法、门控与 facade 公开契约
 ├─ test_facade_ragdata.py  14 项  RagData 构造、解析派发与切块
@@ -708,28 +751,32 @@ tests（静态统计 402 项 def test_；其中模块级标记 integration 的�
 ├─ test_parsers_word.py     12 项  WordParser
 ├─ test_embedding.py        21 项  注册表、内置 embedder 与 EmbedderHandler
 ├─ test_llm.py              36 项  注册表、内置 provider 与 LLMHandler
-├─ test_db.py               63 项  注册表、表结构、SQLite 端到端、MySQL 与 PG 集成
-├─ test_vector_store.py     73 项  注册表、DDL、引擎、真实 Milvus 与 PG 集成
-├─ test_integration_qwen_epub_milvus.py  6 项  真实 EPUB 到 Milvus 端到端
-├─ test_integration_facade_ragdata.py  12 项  RagData 集成：真实解析与切块
-└─ test_integration_facade_memoryserver.py  11 项  MemoryServer 集成：四条流程
+├─ test_db.py               63 项  注册表、表结构、SQLite 端到端、MySQL 与 PG 集成（整文件 integration）
+├─ test_vector_store.py     73 项  注册表、DDL、引擎、真实 Milvus 与 PG 集成（整文件 integration）
+├─ test_rag_eval.py         27 项  评测指标与执行器单测，另含 2 项 integration
+├─ test_epub_to_milvus_and_pg.py 2 项  EPUB 解析向量化后同时写入 Milvus 与 PG，只做插入与回查（整文件 eval）
+├─ test_spacy.py            13 项  spaCy 分词与词形探索性用例，无断言
+├─ test_milvus_spacy_nlp.py  3 项  Milvus BM25 与 NLP 分析器匹配度（整文件 integration）
+├─ test_integration_qwen_epub_milvus.py  6 项  真实 EPUB 到 Milvus 端到端（整文件 integration）
+├─ test_integration_facade_ragdata.py  12 项  RagData 集成：真实解析与切块（整文件 integration）
+└─ test_integration_facade_memoryserver.py  11 项  MemoryServer 集成：四条流程（整文件 integration）
 ```
 
-集成用例分布在 test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py、test_integration_facade_ragdata.py、test_integration_facade_memoryserver.py：这五个文件在模块级声明 pytestmark 为 integration，并检查 --integration 参数，未提供时以 allow_module_level 整体跳过并打印 [SKIP INFO]；默认 addopts 另加 -m not integration 反选。
+标记与门控：test_db.py、test_vector_store.py、test_integration_qwen_epub_milvus.py、test_integration_facade_ragdata.py、test_integration_facade_memoryserver.py、test_milvus_spacy_nlp.py 在模块级声明 pytestmark 为 integration；test_epub_to_milvus_and_pg.py 声明 pytestmark 为 eval；test_rag_eval.py 内两个集成用例单独加 integration 标记。这些文件同时检查 --integration 或 --eval 参数，未提供时以 allow_module_level 整体跳过并打印 [SKIP INFO]；默认 addopts 为 -m not integration，评分用例还需显式加 -m eval 才会被收集。
 
-跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常，配合 -rs 可查看跳过清单。集成用例的配置统一写在测试目录的 conftest.py（顶部的各分区 JSON 变量）：各分区实例化为 Settings 对象，其余从对应 *_CONFIG 字典读取，测试不再读取环境变量；数据库名与集合名统一以 autotest_ 开头，删除动作只在该前缀下执行。
+跳过信息由各测试模块内的局部辅助函数输出，包含依赖名、目标地址与原始异常，配合 -rs 可查看跳过清单。集成配置统一写在 conftest.py 顶部的各分区 JSON（MILVUS、PG、MYSQL、SQLITE、VECTOR、EMBEDDING、LLM、PARSING、SAMPLES、CASES）：各分区实例化为 Settings 对象，其余从对应 *_CONFIG 字典读取；只有嵌入密钥例外，由 conftest 从项目根的 .env_ai_key 读取 embedding_api_key 注入。数据库名、集合名与表名统一以 autotest_ 开头，删除动作先过 storage 的 guard。test_epub_to_milvus_and_pg.py 例外：配置写在该文件顶部独立 JSON，不读 conftest。
 
-memory 尚无独立测试文件：装配与四条流程代理由 test_facade_memoryserver.py 的替身用例覆盖，`scope.py`、`stores.py`、`prompts.py` 的纯函数用例待补。
+memory 尚无独立测试文件：装配与四条流程代理由 test_facade_memoryserver.py 的替身用例覆盖，scope.py、stores.py、prompts.py 的纯函数用例待补；test_spacy.py 目前只打印分词结果、无断言。
 
 ---
 
 ## 12. 依赖
 
-核心依赖仅两项：pydantic 与 pydantic-settings。其余按用途分组为可选依赖（extras），声明见 pyproject.toml。
+核心依赖三项：pydantic、pydantic-settings 与 PyYAML（供两个设置类的 load_yaml 使用）。其余按用途分组为可选依赖（extras），声明见 pyproject.toml。
 
 | 组 | 包 |
 | :--- | :--- |
-| 核心 | pydantic、pydantic-settings |
+| 核心 | pydantic、pydantic-settings、PyYAML（load_yaml） |
 | parsers | unstructured、spacy、zh_core_web_sm、zh_core_web_md |
 | epub | EbookLib、beautifulsoup4 |
 | pdf | pdfplumber |
@@ -742,11 +789,11 @@ memory 尚无独立测试文件：装配与四条流程代理由 test_facade_mem
 | milvus | pymilvus（向量库 Milvus 后端，建议 2.5 及以上以支持 BM25） |
 | dev | pytest、pytest-cov、mypy、ruff |
 
-环境装配：pyproject.toml 定义 default 与 rag_data_dev 两套 hatch 环境，按 features 自动安装上述 extras；rag_data_dev 额外包含 sqlalchemy、pg、mysql、milvus、word、pdf、openai。
+环境装配：pyproject.toml 定义 default 与 rag_data_dev 两套 hatch 环境，按 features 自动安装上述 extras；default 为 parsers、embedding、epub、dev，rag_data_dev 另含 sqlalchemy、pg、mysql、milvus、word、pdf、openai。
 
-memory 未引入新依赖：它复用 embedding、llm 与 storage 三层的现成包；spaCy 句柄位于 nlp 子包，仍属 parsers extra 覆盖范围。
+memory 与 eval 均未引入新依赖：复用 embedding、llm 与 storage 的现成包；spaCy 句柄与词形函数位于 nlp 子包，仍属 parsers extra 覆盖范围。
 
-注意：PyYAML 用于两个设置类的 `load_yaml`，当前未在 pyproject.toml 声明，生产使用前建议补充依赖或新增 yaml extra。
+注意：PyYAML 已列入核心 dependencies，不再需要 yaml extra；openai extra 当前锁定 openai==3.26.0，升级前需核对可用版本。
 
 ---
 
@@ -759,11 +806,15 @@ memory 未引入新依赖：它复用 embedding、llm 与 storage 三层的现�
 | memory | 四条流程的异步版本、delete_all、reset 均不在本期；实体图谱、时序与衰减策略明确排除 |
 | memory | 检索与写入参数已下沉为模块常量；若确需运行时调优，再考虑回配置并同步测试 |
 | memory | 无独立测试文件，scope、stores、prompts 的纯函数用例待补 |
+| memory | update 路径的词形文本仍用 keyword_text，与写入侧的 lemmatize_zh_for_bm25 不一致，待统一 |
 | 数据保存 | 向量落库流程与批量导入编排，需调用方自行组合 parser、embedder 与 vector |
 | facade | 是否把记忆的检索与写入纳入更多流程方法，而非仅由 MemoryServer 代理 |
-| config | pyproject.toml 未声明 PyYAML |
+| nlp | clear_cache 只清主缓存，未清 _PIPELINES_LEMMA，热重建时会读到陈旧的词形管线 |
+| nlp | lemmatize_for_bm25 目前无调用方（memory 只用中文版本），英文路径待接或删除该导入 |
 | 包导入 | `import rag_data` 经 facade 间接依赖 memory、storage 的顶层导入，未装 SQLAlchemy 时会抛 ModuleNotFoundError，与可选依赖的惰性原则不符 |
 | 子包导出 | 各子包 __init__.py 的重导出策略尚未完全统一 |
+| eval | 目前只有 RAG 评测；指标与生成评分口径可扩展，检索侧依赖 payload 的 doc_id 约定，入库时需自行写入 |
+| tests | test_spacy.py 无断言且未判空句柄，入库前需改为断言用例或删除；集成用例的真实服务结果未纳入 CI |
 | 遗留目录 | src 下的 rag_data/util 为空目录（仅 __pycache__），待清理 |
 
 
