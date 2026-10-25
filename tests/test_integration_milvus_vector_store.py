@@ -232,16 +232,6 @@ def test_parse_tolerates_missing_distance() -> None:
     assert results[0].metadata is None
 
 
-# ---------------- 集合守卫（delete_col） ----------------
-
-
-def test_delete_col_rejects_non_test_collection() -> None:
-    '''删集合前过前缀守卫：非 autotest_ 前缀一律拒绝，防止误删生产数据。'''
-    store = _bare_store(collection='production_vectors')
-    with pytest.raises(StorageError):
-        store.delete_col()
-
-
 # ---------------- 真实服务：写入、检索、更新与删除 ----------------
 
 

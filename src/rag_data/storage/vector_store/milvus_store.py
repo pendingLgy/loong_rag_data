@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import re
 from copy import copy
 from typing import Any, Dict, List, Optional
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
-from rag_data.storage.guard import ensure_test_table
 from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, VectorStoreResult
 
 try:  # 可选依赖：模块仍可导入，缺库时仅在实例化时报错。
@@ -111,17 +110,6 @@ class MilvusVectorStore(VectorStoreBase):
         index_params.add_index(field_name="sparse", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25", index_name="sparse_index")
         self.client.create_collection(collection_name=name, schema=self._schema(vector_size), index_params=index_params)
 
-
-    def delete_col(self) -> None:
-        """删除当前集合。"""
-        target = ensure_test_table(self.collection_name)
-        self.client.drop_collection(collection_name=target)
-
-
-    def reset(self) -> None:
-        """删除并重建当前集合。"""
-        self.delete_col()
-        self.create_col(self.collection_name)
 
     def _record(self, rid: int, vector: List[float], payload: Dict[str, Any]) -> Dict[str, Any]:
         """组装写入记录：text 优先取 text_lemmatized，回退 data 或 text。"""
