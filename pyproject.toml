@@ -66,6 +66,7 @@ ragas = [
 
 dev = [
   "pytest>=7.4",
+  "pytest-asyncio>=1.4.0",
   "pytest-cov>=4.1",
   "mypy>=1.8",
   "ruff>=0.1.9",
@@ -127,13 +128,18 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+asyncio_mode = "auto"
+
 markers = [
   "integration: 集成测试，默认跳过",
   "eval: 评分，默认跳过",
 ]
+
 addopts = "-s -q -rs -m 'not integration'"
 #addopts = "-s -q -rs -m 'integration'"
 #addopts = "-s -q -rs -m 'eval'"
+
 log_cli = true
 log_cli_level = "INFO"
 log_cli_format = "%(asctime)s [%(levelname)s] [%(pathname)s:%(funcName)s() %(lineno)d] %(message)s"

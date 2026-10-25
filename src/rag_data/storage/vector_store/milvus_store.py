@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 def _as_scope_int(value: Any) -> Optional[int]:
-    '''作用域标识归一为 INT64：None 与空串视为未设置，无法转整数时告警并丢弃。'''
+    """作用域标识归一为 INT64：None 与空串视为未设置，无法转整数时告警并丢弃。"""
     if value is None or value == '':
         return None
     try:
@@ -91,8 +91,8 @@ class MilvusVectorStore(VectorStoreBase):
             # sparse 由 BM25 函数按 text 自动生成，稠密检索与关键词检索共用该集合。
             FieldSchema(name="sparse", dtype=DataType.SPARSE_FLOAT_VECTOR),
             # 声明带时区的日期时间字段（使用 VARCHAR 存储 ISO 8601 字符串）
-            FieldSchema(name="updated_at_tz", dtype=DataType.VARCHAR,max_length=64),
-            FieldSchema(name="created_at_tz", dtype=DataType.VARCHAR,max_length=64),
+            FieldSchema(name="updated_at_tz", dtype=DataType.TIMESTAMPTZ),
+            FieldSchema(name="created_at_tz", dtype=DataType.TIMESTAMPTZ),
         ]
         schema = CollectionSchema(fields, enable_dynamic_field=True)
         schema.add_function(Function(name="text_lemma_bm25", input_field_names=["text_lemma"], output_field_names=["sparse"], function_type=FunctionType.BM25))
@@ -267,3 +267,167 @@ class MilvusVectorStore(VectorStoreBase):
 
         results = self._query_parse(rows)
         return [results]
+
+
+try:  # 可选依赖：异步客户端自 pymilvus 2.5 起提供，缺失时仅异步实现不可用。
+    from pymilvus import AsyncMilvusClient
+    _ASYNC_PYMILVUS_ERROR: Optional[Exception] = None
+except ImportError as exc:  # pragma: no cover
+    AsyncMilvusClient = None  # type: ignore[assignment]
+    _ASYNC_PYMILVUS_ERROR = exc
+
+
+class AsyncMilvusVectorStore(MilvusVectorStore):
+    """Milvus 异步实现：schema、记录组装与结果解析复用同步版，只有 IO 换成 AsyncMilvusClient。
+
+    建连与建集合都要 await，无法放进 __init__，故用 create() 类方法构造；不声明 backend，
+    避免覆盖注册表里同步实现的登记。
+    """
+    backend = "milvus_async"
+
+    def __init__(
+        self,
+        client: Any,
+        collection_name: str = '',
+        vector_size: int = 1024,
+        metric_type: MetricType = 'COSINE',
+    ) -> None:
+        self.client = client
+        self.collection_name = collection_name
+        self.vector_size = vector_size
+        self.metric_type = metric_type
+
+    @classmethod
+    async def create(
+        cls,
+        uri: str = 'http://localhost:19530',
+        token: str = '',
+        collection_name: str = '',
+        vector_size: int = 1024,
+        db_name: str = '',
+        user: str = '',
+        password: str = '',
+        timeout: Optional[float] = None,
+    ) -> 'AsyncMilvusVectorStore':
+        """建连并确保集合存在；缺 pymilvus 或其版本过低时抛 OptionalDependencyError。"""
+        if AsyncMilvusClient is None:
+            raise OptionalDependencyError(
+                '异步 Milvus 客户端需要 pymilvus>=2.5，请安装或升级 pymilvus'
+            ) from _ASYNC_PYMILVUS_ERROR
+        try:
+            client = AsyncMilvusClient(
+                uri=uri, token=token, db_name=db_name, user=user, password=password, timeout=timeout
+            )
+        except Exception as exc:
+            raise StorageError('无法连接 Milvus（异步）：' + str(exc)) from exc
+
+        store = cls(client, collection_name=collection_name, vector_size=vector_size)
+        await store.create_col(collection_name, vector_size)
+        return store
+
+    async def create_col(self, name: str, vector_size: int, distance: MetricType = 'COSINE') -> None:
+        """集合不存在时按同一 schema 创建；已存在则直接复用。"""
+        if await self.client.has_collection(name):
+            logger.info('collection %s is exist', name)
+            return
+
+        index_params = self.client.prepare_index_params()
+        index_params.add_index(
+            field_name='vectors', metric_type=distance, index_type='AUTOINDEX', index_name='vector_index'
+        )
+        index_params.add_index(
+            field_name='sparse', index_type='SPARSE_INVERTED_INDEX', metric_type='BM25', index_name='sparse_index'
+        )
+        await self.client.create_collection(
+            collection_name=name, schema=self._schema(vector_size), index_params=index_params
+        )
+
+    async def insert(self, vectors: List[List[float]], payloads: List[Dict[str, Any]], ids: List[int]) -> None:
+        """批量写入：记录组装复用同步版。"""
+        data = [self._record(rid, vector, payload) for rid, vector, payload in zip(ids, vectors, payloads)]
+        try:
+            await self.client.insert(collection_name=self.collection_name, data=data)
+        except Exception as exc:
+            raise StorageError('Milvus 异步写入失败：' + str(exc)) from exc
+
+    async def delete(self, id: int) -> None:
+        """按 id 删除单条。"""
+        await self.client.delete(collection_name=self.collection_name, ids=[id])
+
+    async def update(
+        self, id: int, vector: Optional[List[float]] = None, payload: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """按 id 更新；缺省字段沿用已有记录。"""
+        if vector is None or payload is None:
+            existing = await self.client.get(collection_name=self.collection_name, ids=id)
+            if not existing:
+                raise StorageError('待更新的向量不存在：' + str(id))
+            if vector is None:
+                vector = existing[0].get('vectors')
+            if payload is None:
+                payload = existing[0].get('metadata')
+        await self.client.upsert(collection_name=self.collection_name, data=self._record(id, vector, payload))
+
+    async def get(self, id: int) -> Optional[VectorStoreResult]:
+        """按 id 读取单条，不存在返回 None。"""
+        result = await self.client.get(collection_name=self.collection_name, ids=id)
+        if not result:
+            return None
+        return VectorStoreResult.to_vector_store_result(**result[0])
+
+    async def search(
+        self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None
+    ) -> List[VectorStoreResult]:
+        """稠密向量检索；集合含稀疏字段，故显式指定 anns_field。"""
+        kwargs: Dict[str, Any] = {
+            'collection_name': self.collection_name,
+            'data': [vectors],
+            'anns_field': 'vectors',
+            'limit': top_k,
+            'filter': self._create_filter(filters),
+            'output_fields': ['*'],
+        }
+        try:
+            hits = await self.client.search(**kwargs)
+        except Exception as exc:
+            raise StorageError('Milvus 异步检索失败：' + str(exc)) from exc
+        return self._parse(hits[0] if hits else [])
+
+    async def keyword_search(
+        self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None
+    ) -> Optional[List[VectorStoreResult]]:
+        """BM25 关键词检索：以原始查询文本作为稀疏向量输入；失败返回 None，与同步实现一致。"""
+        try:
+            hits = await self.client.search(
+                collection_name=self.collection_name,
+                data=[query],
+                anns_field='sparse',
+                limit=top_k,
+                filter=self._create_filter(filters),
+                output_fields=['*'],
+            )
+        except Exception:
+            return None
+        return self._parse(hits[0] if hits else [])
+
+    async def list(
+        self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None
+    ) -> List[List[VectorStoreResult]]:
+        """列出集合内容；外层列表按既有约定包一层。"""
+        rows = await self.client.query(
+            collection_name=self.collection_name,
+            filter=self._create_filter(filters),
+            limit=top_k or 100,
+            output_fields=['*'],
+        )
+        return [self._query_parse(rows or [])]
+
+    async def close(self) -> None:
+        """关闭异步客户端，释放连接。"""
+        closer = getattr(self.client, 'close', None)
+        if closer is None:
+            return
+        try:
+            await closer()
+        except Exception as exc:
+            raise StorageError('关闭 Milvus 异步连接失败：' + str(exc)) from exc

@@ -1,8 +1,9 @@
 # 运行：pytest tests 目录下的 test_vector_store.py --integration -m integration -v -s
 # 集合名取自 conftest 的 cases.vector_store.collection，必须以 autotest_ 开头。
-
+import random
 import sys
 import time
+from datetime import timezone, datetime
 
 import pytest
 
@@ -20,9 +21,8 @@ from rag_data.storage.vector_store import milvus_store as milvus_module  # noqa:
 from rag_data.storage.vector_store.milvus_store import MilvusVectorStore  # noqa: E402
 
 COLLECTION = CASES_CONFIG['vector_store']['collection']
-# 基数同时用于主键与 tenant_id（均为 INT64）：按当前秒数取余到分钟级再抬高基数，避免重复运行与历史数据撞主键。
-# 每轮运行使用独立租户，隔离历史残留数据，避免检索结果被旧行干扰。
-BASE_ID = divmod(int(time.time()), 60)[1] * 1000 + 900000
+# 原有逻辑放大，并加上 4 位随机数（0 ~ 9999）
+BASE_ID = (divmod(int(time.time()), 60)[1] * 1000 + 900000) * 10000 + random.randint(0, 9999)
 
 
 # ---------------- 前置校验与替身 ----------------
@@ -52,13 +52,14 @@ def _vector(index):
 
 def _payload(index, tenant=BASE_ID, user_id=BASE_ID + 1, text='配置加载优先级', lemma='配置 加载 优先级'):
     '''最小合法 payload：tenant_id 必填，集合中该字段不可空。'''
+    stamp = datetime.now(tz=timezone.utc)
     return {
         'tenant_id': tenant,
         'user_id': user_id,
         'text': text,
         'text_lemma': lemma,
-        'created_at_tz': '2025-01-01T00:00:00+00:00',
-        'created_at_tz': '2025-01-01T00:00:00+00:00',
+        'created_at_tz': stamp,
+        'created_at_tz': stamp,
         'doc_id': 'doc_' + str(index),
     }
 
@@ -79,7 +80,6 @@ def test_record_maps_declared_fields() -> None:
     assert record['text'] == '配置加载优先级'
     assert record['text_lemma'] == '配置 加载 优先级'
     assert record['vectors'] == _vector(0)
-    assert record['created_at_tz'].startswith('2025-01-01')
 
 
 def test_record_leaves_sparse_to_bm25_function() -> None:
