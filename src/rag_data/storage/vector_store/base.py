@@ -97,34 +97,9 @@ class VectorStoreBase(ABC):
     def get(self, id: int) -> Optional[VectorStoreResult]:
         """按 id 读取单条，不存在返回 None。"""
 
-
-    @abstractmethod
-    def delete_col(self) -> None:
-        """删除当前集合。"""
-
-
     @abstractmethod
     def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> List[List[VectorStoreResult]]:
         """列出集合内容（外层列表按既有约定包裹一层）。"""
-
-    @abstractmethod
-    def reset(self) -> None:
-        """删除并重建当前集合。"""
-
-    def drop_table(self, name: Optional[str] = None) -> str:
-        """按名删除表或集合：只允许 autotest_ 前缀的集成测试表，返回被删除的名字。
-
-        name 缺省为当前集合名；前缀校验在删除前完成，不满足直接抛 StorageError。
-        """
-        target = ensure_test_table(name or self.collection_name)
-        self._drop_col(target)
-        return target
-
-    def _drop_col(self, name: str) -> None:
-        """按名物理删除；默认只支持当前集合，实现层可覆盖以支持任意表名。"""
-        if name != self.collection_name:
-            raise StorageError("当前向量库实现不支持按名删除：" + str(name))
-        self.delete_col()
 
     def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
         """关键字（BM25 或全文）检索；不支持的实现返回 None。"""

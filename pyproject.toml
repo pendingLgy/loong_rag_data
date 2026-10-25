@@ -39,7 +39,10 @@ parsers = [
 embedding = ["sentence-transformers>=2.5"]
 milvus = ["pymilvus>=2.3"]
 sqlalchemy = ["SQLAlchemy>=2.0"]
-pg = ["psycopg[binary]>=3.1"]
+pg = [
+  "psycopg[binary]>=3.1",
+  "pgvector>=0.5.1"
+]
 mysql = ["pymysql>=1.1"]
 epub = [
   "EbookLib>=0.20",
