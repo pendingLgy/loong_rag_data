@@ -26,11 +26,36 @@ class VectorStoreResult(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    id: Optional[str] = None
+    id: Optional[int] = None
+    tenant_id: Optional[int] = None
+    user_id: Optional[int] = None
+    text: Optional[str] = None
+    text_lemma: Optional[str] = None
+    updated_at_tz: Optional[str] = None
+    created_at_tz: Optional[str] = None
+
     # 相似度分数，越大越相似；list、get 等无排序语境下为 None。
     score: Optional[float] = None
-    payload: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
+    @classmethod
+    def to_vector_store_result(cls, **kwargs) -> VectorStoreResult:
+        id = int(kwargs.get("id")) if kwargs.get("id") else None
+        tenant_id = int(kwargs.get("tenant_id")) if kwargs.get("tenant_id") else None
+        user_id = int(kwargs.get("user_id")) if kwargs.get("user_id") else None
+        score = float(kwargs.get("score")) if kwargs.get("score") else None
+
+        return VectorStoreResult(
+            id=id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            text=kwargs.get("text"),
+            text_lemma=kwargs.get("text_lemma"),
+            updated_at_tz=kwargs.get("updated_at_tz"),
+            created_at_tz=kwargs.get("created_at_tz"),
+            score=score,
+            metadata=kwargs.get("metadata")
+        )
 
 class VectorStoreBase(ABC):
     """向量库统一接口：声明 backend 后自动登记，配置改后端名即可切换。"""
@@ -53,7 +78,7 @@ class VectorStoreBase(ABC):
         """新建集合（PG 中即建表）。"""
 
     @abstractmethod
-    def insert(self, vectors: List[List[float]], payloads: Optional[List[Dict[str, Any]]] = None, ids: Optional[List[str]] = None) -> None:
+    def insert(self, vectors: List[List[float]], payloads: List[Dict[str, Any]], ids: List[int] ) -> None:
         """批量写入向量及其元数据；ids 缺省时由实现自行生成。"""
 
     @abstractmethod
@@ -61,28 +86,22 @@ class VectorStoreBase(ABC):
         """按相似度检索，返回按 score 降序的结果。"""
 
     @abstractmethod
-    def delete(self, vector_id: str) -> None:
+    def delete(self, id: int) -> None:
         """按 id 删除单条。"""
 
     @abstractmethod
-    def update(self, vector_id: str, vector: Optional[List[float]] = None, payload: Optional[Dict[str, Any]] = None) -> None:
+    def update(self, id: int, vector: Optional[List[float]] = None, payload: Optional[Dict[str, Any]] = None) -> None:
         """按 id 更新向量与元数据（可只更新其一）。"""
 
     @abstractmethod
-    def get(self, vector_id: str) -> Optional[VectorStoreResult]:
+    def get(self, id: int) -> Optional[VectorStoreResult]:
         """按 id 读取单条，不存在返回 None。"""
 
-    @abstractmethod
-    def list_cols(self) -> List[str]:
-        """列出全部集合名。"""
 
     @abstractmethod
     def delete_col(self) -> None:
         """删除当前集合。"""
 
-    @abstractmethod
-    def col_info(self) -> Dict[str, Any]:
-        """返回当前集合的统计信息。"""
 
     @abstractmethod
     def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> List[List[VectorStoreResult]]:

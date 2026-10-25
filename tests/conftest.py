@@ -133,7 +133,7 @@ SAMPLES_JSON = r"""
 CASES_JSON = r"""
 {
   "vector_store": {
-    "collection": "autotest_vector"
+    "collection": "autotest_memories"
   },
   "qwen_epub": {
     "collection": "autotest_qwen_epub"
