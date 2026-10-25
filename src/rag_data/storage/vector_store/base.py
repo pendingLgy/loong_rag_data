@@ -43,7 +43,7 @@ class VectorStoreResult(BaseModel):
         id = int(kwargs.get("id")) if kwargs.get("id") else None
         tenant_id = int(kwargs.get("tenant_id")) if kwargs.get("tenant_id") else None
         user_id = int(kwargs.get("user_id")) if kwargs.get("user_id") else None
-        score = float(kwargs.get("score")) if kwargs.get("score") else None
+        score = float(kwargs.get("score")) if kwargs.get("score") is not None else None
 
         return VectorStoreResult(
             id=id,

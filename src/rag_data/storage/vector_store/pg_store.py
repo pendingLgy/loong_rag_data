@@ -248,28 +248,47 @@ class PGVectorStore(VectorStoreBase):
         with self._session() as session:
             session.execute(insert(table), rows)
 
+    def _parse(self, row_dict: Dict[str, Any]) -> VectorStoreResult:
+        # 将时间字段转换为字符串（若存在且不为 None）
+        if row_dict.get("created_at_tz") is not None:
+            row_dict["created_at_tz"] = row_dict["created_at_tz"].isoformat()
+
+        if row_dict.get("updated_at_tz") is not None:
+            row_dict["updated_at_tz"] = row_dict["updated_at_tz"].isoformat()
+        store = VectorStoreResult.to_vector_store_result(**row_dict)
+        return store
+
     def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> \
             List[VectorStoreResult]:
         table = self._get_table()
-        distance_expr = table.c.vector.cosine_distance(vectors).label("distance")
-        stmt = select(table.c.id, distance_expr, table.c.metadata)
+        score_expr = table.c.vector.cosine_distance(vectors).label("score")
+        stmt = select(
+            table.c.id,
+            table.c.tenant_id,
+            table.c.user_id,
+            table.c.text,
+            table.c.text_lemma,
+            table.c.updated_at_tz,
+            table.c.created_at_tz,
+            score_expr,
+            table.c.metadata)
 
         where_clause = _build_sqlalchemy_filter(table, filters)
         if where_clause is not None:
             stmt = stmt.where(where_clause)
 
-        stmt = stmt.order_by("distance").limit(top_k)
+        stmt = stmt.order_by("score").limit(top_k)
 
         with self._session() as session:
             rows = session.execute(stmt).fetchall()
 
-        return [
-            VectorStoreResult.to_vector_store_result(id=row[0], score=max(0.0, 1.0 - float(row[1])), metadata=row[2])
-            for row in rows
-        ]
+        results: List[VectorStoreResult] = []
+        for row in rows:
+            row_dict = row._asdict()
+            results.append(self._parse(row_dict))
+        return results
 
-    def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[
-        List[VectorStoreResult]]:
+    def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
         "基于 text_lemma 的全文检索；失败返回 None。"
         table = self._get_table()
         query_expression = query.replace(" ", " | ")
@@ -308,24 +327,16 @@ class PGVectorStore(VectorStoreBase):
         results: List[VectorStoreResult] = []
         for row in rows:
             row_dict = row._asdict()
-            # 将时间字段转换为字符串（若存在且不为 None）
-            if row_dict.get("created_at_tz") is not None:
-                row_dict["created_at_tz"] = row_dict["created_at_tz"].isoformat()
-
-            if row_dict.get("updated_at_tz") is not None:
-                row_dict["updated_at_tz"] = row_dict["updated_at_tz"].isoformat()
-            store = VectorStoreResult.to_vector_store_result(**row_dict)
-            results.append(store)
-
+            results.append(self._parse(row_dict))
         return results
 
-    def delete(self, vector_id: str) -> None:
+    def delete(self, id: int) -> None:
         table = self._get_table()
-        stmt = delete(table).where(table.c.id == int(vector_id))
+        stmt = delete(table).where(table.c.id == id)
         with self._session() as session:
             session.execute(stmt)
 
-    def update(self, vector_id: str, vector: Optional[List[float]] = None,
+    def update(self, id: int, vector: Optional[List[float]] = None,
                payload: Optional[Dict[str, Any]] = None) -> None:
         table = self._get_table()
         update_data = {}
@@ -335,18 +346,28 @@ class PGVectorStore(VectorStoreBase):
             update_data["metadata"] = payload
 
         if update_data:
-            stmt = update(table).where(table.c.id == int(vector_id)).values(**update_data)
+            stmt = update(table).where(table.c.id == id).values(**update_data)
             with self._session() as session:
                 session.execute(stmt)
 
-    def get(self, vector_id: str) -> Optional[VectorStoreResult]:
+    def get(self, id: int) -> Optional[VectorStoreResult]:
         table = self._get_table()
-        stmt = select(table.c.id, table.c.metadata).where(table.c.id == int(vector_id))
+        stmt = (select(
+            table.c.id,
+            table.c.tenant_id,
+            table.c.user_id,
+            table.c.text,
+            table.c.text_lemma,
+            table.c.updated_at_tz,
+            table.c.created_at_tz,
+            table.c.metadata
+        ).where(table.c.id == id))
         with self._session() as session:
             row = session.execute(stmt).fetchone()
         if not row:
             return None
-        return VectorStoreResult.to_vector_store_result(id=row[0], metadata=row[1])
+
+        return self._parse(row._asdict())
 
     def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> List[
         List[VectorStoreResult]]:
