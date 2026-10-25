@@ -93,6 +93,7 @@ VECTOR_JSON = r"""
 
 EMBEDDING_JSON = r"""
 {
+  "enable": true,
   "provider": "qwen",
   "model": "qwen3.7-text-embedding",
   "dim": 1024,
@@ -103,6 +104,7 @@ EMBEDDING_JSON = r"""
 
 LLM_JSON = r"""
 {
+  "enable": true,
   "provider": "qwen",
   "model": "qwen-plus",
   "temperature": 0.0

@@ -105,9 +105,6 @@ COLLECTION = "eval_rag_data"
 # 向量维度一律取嵌入配置，避免与 vector.dim 的占位值不一致。
 DIM = EMBEDDING_SETTINGS.dim
 
-# 单次运行的 id 基址取自毫秒时间戳，重复运行不会与历史数据主键冲突。
-BASE_ID = int(time.time()) * 1000
-
 
 # PG 连接参数。
 PG_CONNECTION_STRING = PG_VECTOR_SETTINGS.connection_string
@@ -181,7 +178,8 @@ def _build_rows(app: RagData, path: str) -> List[Dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 句柄或模型缺失属环境问题
         _skip('切块不可用：' + type(exc).__name__ + ' ' + str(exc))
     assert chunks
-    batch = chunks[:1]
+    # batch = chunks[:1]
+    batch = chunks
 
     vectors = app.embedder.encode(batch)
     assert len(vectors) == len(batch)

@@ -51,12 +51,23 @@ hatch env create rag_data_dev
 # 查看已有环境
 hatch env show
 
-# 清理环境：不带参数清理全部，-e 或 --env 指定环境名（如 dev、parsers）
-hatch env prune
-hatch env prune -e parsers
+# 清理环境：
+hatch env prune # 清理所有环境
+hatch env remove rag_data_dev # 清理指定环境
+
+# 移除指定环境依赖
+hatch run rag_data_dev:pip uninstall <package_name>
+# 安装指定环境依赖
+hatch run rag_data_dev:pip install langchain-core>=1.7.0  
 
 # 查看已安装依赖
 hatch run rag_data_dev:pip list
+
+hatch run rag_data_dev:pip install pipdeptree # 安装依赖树查看库
+hatch run rag_data_dev:pipdeptree  # 查看依赖树
+
+hatch run rag_data_dev:pip show ragas # 查看具体包信息
+hatch run rag_data_dev:pipdeptree -p ragas  # 查看具体包依赖树
 
 # 进入交互式 shell
 hatch shell
