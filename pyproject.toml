@@ -48,7 +48,11 @@ pg = [
   "pgvector>=0.5.1",
   "asyncpg>=0.32.0"
 ]
-mysql = ["pymysql>=1.1"]
+mysql = [
+  "pymysql>=1.1",
+  "aiomysql>=0.3.2"
+]
+
 epub = [
   "EbookLib>=0.20",
   "beautifulsoup4>=4.15.0"

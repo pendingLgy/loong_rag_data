@@ -2,35 +2,55 @@
 
 from __future__ import annotations
 
-import threading
-from abc import abstractmethod
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import logging
 
-from sqlalchemy import delete, inspect, insert, select, text
+from abc import abstractmethod
+from contextlib import contextmanager, asynccontextmanager
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Iterator
+
+from sqlalchemy import delete, inspect, insert, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from rag_data.exceptions import ConfigError, StorageError
 from rag_data.storage.db.base import BaseDB
 from rag_data.storage.db.schema import HISTORY_TABLE, MESSAGES_TABLE, METADATA, HistoryRecord, Message
 from rag_data.storage.db.snowflake import next_id
-from rag_data.storage.guard import ensure_test_tables
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.config import DBSettings
 
 
-class SQLDatabase(BaseDB):
+class DBEngine(BaseDB):
     """基于 SQLAlchemy Core 的通用实现：单引擎加互斥锁，方言差异由子类提供连接串。"""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self.engine = self._open_engine()
+        self.engine = None
+        self.SessionLocal = None
+
+        """创建并返回 SQLAlchemy 引擎。"""
+
+    def _init_db(self, engine, sessionLocal):
+        self.engine = engine
+        self.SessionLocal = sessionLocal
         self._ensure_schema()
 
-    @abstractmethod
-    def _open_engine(self) -> Engine:
-        """创建并返回 SQLAlchemy 引擎。"""
+    @contextmanager
+    def _session(self) -> Iterator[Session]:
+        """使用标准 sessionmaker 管理会话生命周期"""
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def _missing_tables(self) -> List[Any]:
         """启动时检查：返回尚未建表的数据表列表。"""
@@ -42,19 +62,70 @@ class SQLDatabase(BaseDB):
         try:
             missing = self._missing_tables()
             if not missing:
+                logger.info("tables exist")
                 return
             for table in missing:
                 table.create(self.engine, checkfirst=True)
         except Exception as exc:
             raise StorageError("建表失败" + ": " + str(exc)) from exc
 
-    # ---------------- 历史记录 ----------------
+    def _record_row(self, record: HistoryRecord) -> Dict[str, Any]:
+        "把历史记录对象转换为可写入的行字典；id 缺省时生成雪花 ID。"
+        return {
+            "id": record.id or next_id(),
+            "memory_id": record.memory_id,
+            "old_memory": record.old_memory,
+            "new_memory": record.new_memory,
+            "event": record.event,
+            "created_at_tz": record.created_at_tz,
+            "updated_at_tz": record.updated_at_tz,
+            "is_deleted": int(record.is_deleted),
+            "actor_id": record.actor_id,
+            "role": record.role,
+        }
+
+    def _to_record(self, row: Dict[str, Any]) -> HistoryRecord:
+        "把数据库行转换为历史记录对象。"
+        return HistoryRecord(
+            id=row.get("id"),
+            memory_id=row.get("memory_id"),
+            old_memory=row.get("old_memory"),
+            new_memory=row.get("new_memory"),
+            event=row.get("event"),
+            created_at_tz=row.get("created_at_tz"),
+            updated_at_tz=row.get("updated_at_tz"),
+            is_deleted=bool(row.get("is_deleted")),
+            actor_id=row.get("actor_id"),
+            role=row.get("role"),
+        )
+
+    def _message_row(self, message: Message) -> Dict[str, Any]:
+        "把消息对象转换为可写入的行字典。"
+        return {
+            "id": message.id or next_id(),
+            "session_scope": message.session_scope,
+            "role": message.role,
+            "content": message.content,
+            "name": message.name,
+            "created_at_tz": message.created_at_tz or datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _to_message(self, row: Dict[str, Any]) -> Message:
+        "把数据库行转换为消息对象。"
+        return Message(
+            id=row.get("id"),
+            session_scope=row.get("session_scope"),
+            role=row.get("role"),
+            content=row.get("content"),
+            name=row.get("name"),
+            created_at_tz=row.get("created_at_tz"),
+        )
 
     def add_history(self, record: HistoryRecord) -> HistoryRecord:
         "追加一条历史记录，返回补全 id 后的对象。"
         row = self._record_row(record)
-        with self._lock, self.engine.begin() as conn:
-            conn.execute(insert(HISTORY_TABLE).values(**row))
+        with self._session() as session:
+            session.execute(insert(HISTORY_TABLE).values(**row))
         return HistoryRecord(**row)
 
     def batch_add_history(self, records: List[HistoryRecord]) -> List[HistoryRecord]:
@@ -62,8 +133,8 @@ class SQLDatabase(BaseDB):
         rows = [self._record_row(record) for record in records]
         if not rows:
             return []
-        with self._lock, self.engine.begin() as conn:
-            conn.execute(insert(HISTORY_TABLE), rows)
+        with self._session() as session:
+            session.execute(insert(HISTORY_TABLE), rows)
         return [HistoryRecord(**row) for row in rows]
 
     def get_history(self, memory_id: int) -> List[HistoryRecord]:
@@ -72,46 +143,11 @@ class SQLDatabase(BaseDB):
         stmt = (
             select(table)
             .where(table.c.memory_id == memory_id)
-            .order_by(table.c.created_at.asc(), table.c.updated_at.asc())
+            .order_by(table.c.created_at_tz.asc(), table.c.updated_at_tz.asc())
         )
-        with self._lock, self.engine.connect() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        with self._session() as session:
+            rows = session.execute(stmt).mappings().all()
         return [self._to_record(dict(row)) for row in rows]
-
-    @staticmethod
-    def _record_row(record: HistoryRecord) -> Dict[str, Any]:
-        "把历史记录对象转换为可写入的行字典；id 缺省时生成雪花 ID。"
-        return {
-            "id": record.id or next_id(),
-            "memory_id": record.memory_id,
-            "old_memory": record.old_memory,
-            "new_memory": record.new_memory,
-            "event": record.event,
-            "created_at": record.created_at,
-            "updated_at": record.updated_at,
-            "is_deleted": int(record.is_deleted),
-            "actor_id": record.actor_id,
-            "role": record.role,
-        }
-
-    @staticmethod
-    def _to_record(row: Dict[str, Any]) -> HistoryRecord:
-        "把数据库行转换为历史记录对象。"
-        return HistoryRecord(
-            id=row.get("id"),
-            memory_id=row.get("memory_id"),
-            old_memory=row.get("old_memory"),
-            new_memory=row.get("new_memory"),
-            event=row.get("event"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
-            is_deleted=bool(row.get("is_deleted")),
-            actor_id=row.get("actor_id"),
-            role=row.get("role"),
-        )
-
-
-    # ---------------- 会话消息 ----------------
 
     def save_messages(self, messages: List[Message], keep_last: int = 10) -> List[Message]:
         "写入消息，并只保留各会话最近的 keep_last 条。"
@@ -120,111 +156,160 @@ class SQLDatabase(BaseDB):
             return []
         table = MESSAGES_TABLE
         scopes = sorted({row["session_scope"] for row in rows})
-        with self._lock, self.engine.begin() as conn:
-            conn.execute(insert(table), rows)
+        with self._session() as session:
+            session.execute(insert(table), rows)
             for scope in scopes:
-                conn.execute(self._evict_stmt(scope, keep_last))
+                session.execute(self._build_evict_stmt(scope, keep_last))
+
         return [self._to_message(row) for row in rows]
 
     def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
         "按时间升序取会话最近 limit 条消息。"
         table = MESSAGES_TABLE
         recent = (
-            select(table.c.id, table.c.session_scope, table.c.role, table.c.content, table.c.name, table.c.created_at)
+            select(table.c.id, table.c.session_scope, table.c.role, table.c.content, table.c.name, table.c.created_at_tz)
             .where(table.c.session_scope == session_scope)
-            .order_by(table.c.created_at.desc(),table.c.id.desc())
+            .order_by(table.c.created_at_tz.desc(), table.c.id.desc())
             .limit(limit)
             .subquery()
         )
-        stmt = select(recent).order_by(recent.c.created_at.asc())
-        with self._lock, self.engine.connect() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        stmt = select(recent).order_by(recent.c.created_at_tz.asc())
+        with self._session() as session:
+            rows = session.execute(stmt).mappings().all()
         return [self._to_message(dict(row)) for row in rows]
 
-    def _evict_stmt(self, session_scope: str, keep_last: int) -> Any:
+    def _build_evict_stmt(self, session_scope: str, keep_last: int) -> Any:
         "构造删除语句：保留会话最近 keep_last 条，其余删除。"
         table = MESSAGES_TABLE
         recent = (
             select(table.c.id)
             .where(table.c.session_scope == session_scope)
-            .order_by(table.c.created_at.desc())
+            .order_by(table.c.created_at_tz.desc())
             .limit(keep_last)
             .subquery()
         )
-        return delete(table).where(table.c.session_scope == session_scope, table.c.id.notin_(select(recent.c.id)))
 
-    @staticmethod
-    def _message_row(message: Message) -> Dict[str, Any]:
-        "把消息对象转换为可写入的行字典。"
-        return {
-            "id": message.id or next_id(),
-            "session_scope": message.session_scope,
-            "role": message.role,
-            "content": message.content,
-            "name": message.name,
-            "created_at": message.created_at or datetime.now(timezone.utc).isoformat(),
-        }
-
-    @staticmethod
-    def _to_message(row: Dict[str, Any]) -> Message:
-        "把数据库行转换为消息对象。"
-        return Message(
-            id=row.get("id"),
-            session_scope=row.get("session_scope"),
-            role=row.get("role"),
-            content=row.get("content"),
-            name=row.get("name"),
-            created_at=row.get("created_at"),
+        stmt = delete(table).where(
+            table.c.session_scope == session_scope,
+            table.c.id.notin_(select(recent.c.id))
         )
 
+        return stmt
 
-    # ---------------- 维护 ----------------
-
-    def drop_tables(self, names: List[str]) -> List[str]:
-        """按名删除数据表：只允许 autotest_ 前缀的集成测试表，返回实际删除的表名。
-
-        表名先整体校验再执行，任一非法即抛 StorageError 且不删除任何表；
-        字符集已由守卫限定为字母、数字与下划线，故按标识符直接拼接。
-        """
-        targets = ensure_test_tables(names)
-        if len(targets) == 0:
-            return []
-        inspector = inspect(self.engine)
-        existing = [name for name in targets if inspector.has_table(name)]
-        if len(existing) == 0:
-            return []
-        dropped: List[str] = []
-        with self._lock:
-            try:
-                with self.engine.begin() as conn:
-                    for name in existing:
-                        conn.execute(text("DROP TABLE IF EXISTS " + name))
-                        dropped.append(name)
-            except Exception as exc:
-                raise StorageError("删表失败" + ": " + str(exc)) from exc
-        return dropped
-
-    def reset(self) -> None:
-        "删除并重建所有表。"
-        with self._lock:
-            try:
-                METADATA.drop_all(self.engine)
-                self._ensure_schema()
-            except Exception as exc:
-                raise StorageError("重置失败" + ": " + str(exc)) from exc
-
-    def close(self) -> None:
-        "释放引擎与连接池；重复调用安全。"
-        with self._lock:
-            if self.engine is not None:
-                self.engine.dispose()
-                self.engine = None
-
-    def __enter__(self) -> "SQLDatabase":
+    def __enter__(self) -> "DBEngine":
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        self.close()
+
+class AsyncDBEngine(DBEngine):
+    """基于 SQLAlchemy Core 的通用实现：单引擎加互斥锁，方言差异由子类提供连接串。"""
+
+    def __init__(self) -> None:
+        self.engine = None
+        self.AsyncSessionLocal = None
+
+    async def _init_db(self, engine, asyncSessionLocal):
+        self.engine = engine
+        self.AsyncSessionLocal = asyncSessionLocal
+        await self._ensure_schema()
+
+    @abstractmethod
+    async def _start(self) -> Engine:
+        """创建并返回 SQLAlchemy 引擎。"""
+
+    @asynccontextmanager
+    async def _session(self) -> Iterator[AsyncSession]:
+        """使用标准 sessionmaker 管理会话生命周期"""
+        async with self.AsyncSessionLocal() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    @abstractmethod
+    async def _missing_tables(self) -> List[Any]:
+        """启动时检查：返回尚未建表的数据表列表（兼容异步引擎）。"""
+
+    async def _ensure_schema(self) -> None:
+        """检查表是否存在，缺失的才创建；全部存在时不做任何写操作。"""
+        try:
+            missing = await self._missing_tables()
+            if not missing:
+                logger.info("tables exist")
+                return
+            async with self.engine.begin() as conn:
+                for table in missing:
+                    await conn.run_sync(table.create, checkfirst=True)
+
+        except Exception as exc:
+            raise StorageError("建表失败" + ": " + str(exc)) from exc
+
+    # ---------------- 历史记录 ----------------
+
+    async def add_history(self, record: HistoryRecord) -> HistoryRecord:
+        "追加一条历史记录，返回补全 id 后的对象。"
+        row = self._record_row(record)
+        async with self._session() as session:
+            await session.execute(insert(HISTORY_TABLE).values(**row))
+        return HistoryRecord(**row)
+
+    async def batch_add_history(self, records: List[HistoryRecord]) -> List[HistoryRecord]:
+        "批量追加历史记录，返回补全 id 后的对象列表。"
+        rows = [self._record_row(record) for record in records]
+        if not rows:
+            return []
+        async with self._session() as session:
+            await session.execute(insert(HISTORY_TABLE), rows)
+        return [HistoryRecord(**row) for row in rows]
+
+    async def get_history(self, memory_id: int) -> List[HistoryRecord]:
+        "按 memory_id 取历史，按时间升序。"
+        table = HISTORY_TABLE
+        stmt = (
+            select(table)
+            .where(table.c.memory_id == memory_id)
+            .order_by(table.c.created_at_tz.asc(), table.c.updated_at_tz.asc())
+        )
+        async with self._session() as session:
+            result = await session.execute(stmt)
+            rows = result.mappings().all()
+        return [self._to_record(dict(row)) for row in rows]
+
+    # ---------------- 会话消息 ----------------
+
+    async def save_messages(self, messages: List[Message], keep_last: int = 10) -> List[Message]:
+        "写入消息，并只保留各会话最近的 keep_last 条。"
+        rows = [self._message_row(message) for message in messages]
+        if not rows:
+            return []
+        table = MESSAGES_TABLE
+        scopes = sorted({row["session_scope"] for row in rows})
+        async with self._session() as session:
+            await session.execute(insert(table), rows)
+            for scope in scopes:
+                await session.execute(self._build_evict_stmt(scope, keep_last))
+
+        return [self._to_message(row) for row in rows]
+
+    async def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
+        "按时间升序取会话最近 limit 条消息。"
+        table = MESSAGES_TABLE
+        recent = (
+            select(table.c.id, table.c.session_scope, table.c.role, table.c.content, table.c.name, table.c.created_at_tz)
+            .where(table.c.session_scope == session_scope)
+            .order_by(table.c.created_at_tz.desc(), table.c.id.desc())
+            .limit(limit)
+            .subquery()
+        )
+        stmt = select(recent).order_by(recent.c.created_at_tz.asc())
+        async with self._session() as session:
+            result = await session.execute(stmt)
+            rows = result.mappings().all()
+        return [self._to_message(dict(row)) for row in rows]
+
+    def __enter__(self) -> "AsyncDBEngine":
+        return self
 
 
 # 按配置装配数据库实例：按 backend 选择方言，参数取自对应方言分区。
@@ -264,4 +349,3 @@ def build_database(settings: "DBSettings") -> BaseDB:
         password=pg.password,
         database=pg.database,
     )
-

@@ -7,6 +7,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import ClassVar, Dict, List, Optional
 
+from sqlalchemy import Engine
+
 from rag_data.exceptions import StorageError
 from rag_data.storage.db.registry_db import register_db
 from rag_data.storage.db.schema import HistoryRecord, Message
@@ -26,8 +28,9 @@ class BaseDB(ABC):
             # 直接登记类对象，避免本地类因 qualname 无法按路径导入。
             register_db(name, cls)
 
-
-    # ---------------- 历史记录 ----------------
+    @abstractmethod
+    def _start(self) -> Engine:
+        """启动数据库连接"""
 
     @abstractmethod
     def add_history(self, record: HistoryRecord) -> HistoryRecord:
@@ -51,20 +54,4 @@ class BaseDB(ABC):
     def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
         """按时间升序取会话最近 limit 条消息。"""
 
-    # ---------------- 维护 ----------------
-
-    @abstractmethod
-    def reset(self) -> None:
-        """清空所有表。"""
-
-    def drop_tables(self, names: List[str]) -> List[str]:
-        """按名删除数据表：仅允许集成测试前缀的表，返回实际删除的表名。
-
-        默认实现直接拒绝；SQL 实现在 SQLDatabase 中覆盖为真删除。
-        """
-        raise StorageError("当前数据库实现不支持按名删表：" + ", ".join(str(name) for name in names))
-
-    @abstractmethod
-    def close(self) -> None:
-        """关闭连接。"""
 

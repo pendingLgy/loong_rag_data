@@ -10,7 +10,7 @@ from rag_data.storage.db.registry_db import (
     resolve_db,
 )
 from rag_data.storage.db.db_engine import build_database
-from rag_data.storage.db.schema import CREATE_SQL, HistoryRecord, Message, create_table_sql
+from rag_data.storage.db.schema import  HistoryRecord, Message
 from rag_data.storage.db.snowflake import SnowflakeGenerator, next_id
 
 __all__ = [
@@ -18,8 +18,6 @@ __all__ = [
     "build_database",
     "HistoryRecord",
     "Message",
-    "CREATE_SQL",
-    "create_table_sql",
     "SnowflakeGenerator",
     "next_id",
     "register_db",
