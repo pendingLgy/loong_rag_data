@@ -201,8 +201,11 @@ class DBSettings(BaseModel):
     # 是否启用该分区；为 False 时门面不初始化对应组件。
     enable: bool = Field(default=False)
 
-    # 当前使用的后端名，对应 storage.db 注册表中的键。
-    backend: Literal["sqlite", "mysql", "pg"] = Field(default="sqlite")
+    # 当前使用的后端名，对应 storage.db 注册表中的键；带 _async 后缀者返回异步实现。
+    backend: Literal[
+        "sqlite", "mysql", "pg",
+        "sqlite_async", "mysql_async", "pg_async",
+    ] = Field(default="sqlite")
 
     sqlite: SQLiteSettings = Field(default_factory=SQLiteSettings)
     mysql: MySQLSettings = Field(default_factory=MySQLSettings)

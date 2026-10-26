@@ -1,6 +1,6 @@
 # 存储薄封装：统一 id 转换、payload 布局与批量回退策略。
 #
-# 记忆层不直接接触方言实现，只依赖 SQLDatabase 与 VectorEngine 的抽象方法。
+# 记忆层不直接接触方言实现，只依赖 DBEngine 与 VectorEngine 的抽象方法。
 
 from __future__ import annotations
 

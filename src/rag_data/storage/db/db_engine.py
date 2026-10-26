@@ -67,6 +67,7 @@ class DBEngine(BaseDB):
                 logger.info("tables exist")
                 return
             for table in missing:
+                logger.info(f"create table {table.name}")
                 table.create(self.engine, checkfirst=True)
         except Exception as exc:
             raise StorageError("建表失败" + ": " + str(exc)) from exc
@@ -145,7 +146,7 @@ class DBEngine(BaseDB):
         stmt = (
             select(table)
             .where(table.c.memory_id == memory_id)
-            .order_by(table.c.created_at_tz.asc(), table.c.updated_at_tz.asc())
+            .order_by(table.c.id.desc())
         )
         with self._session() as session:
             rows = session.execute(stmt).mappings().all()
@@ -251,6 +252,7 @@ class AsyncDBEngine(DBEngine):
                 return
             async with self.engine.begin() as conn:
                 for table in missing:
+                    logger.info(f"create table {table.name}")
                     await conn.run_sync(table.create, checkfirst=True)
 
         except Exception as exc:
@@ -280,7 +282,7 @@ class AsyncDBEngine(DBEngine):
         stmt = (
             select(table)
             .where(table.c.memory_id == memory_id)
-            .order_by(table.c.created_at_tz.asc(), table.c.updated_at_tz.asc())
+            .order_by(table.c.id.desc())
         )
         async with self._session() as session:
             result = await session.execute(stmt)

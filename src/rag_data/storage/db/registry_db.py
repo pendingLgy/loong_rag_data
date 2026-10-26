@@ -17,6 +17,9 @@ BUILTIN_DBS: Dict[str, str] = {
     "sqlite": "rag_data.storage.db.sqlite_db.SQLiteDB",
     "mysql": "rag_data.storage.db.mysql_db.MySQLDB",
     "pg": "rag_data.storage.db.pg_db.PGDB",
+    "sqlite_async": "rag_data.storage.db.sqlite_db.AsyncSQLiteDB",
+    "mysql_async": "rag_data.storage.db.mysql_db.AsyncMySQLDB",
+    "pg_async": "rag_data.storage.db.pg_db.AsyncPGDB",
 }
 
 _REGISTRY = Registry("数据库后端", BUILTIN_DBS)

@@ -30,7 +30,7 @@ def get_history_table(table_metadata: MetaData, prefix: str = "") -> Any:
         Column("is_deleted", SmallInteger, nullable=False, default=0),
         Column("actor_id", String(64), nullable=True),
         Column("role", String(32), nullable=True),
-        Index("ix_history_memory_id", "memory_id"),
+        Index(prefix + "ix_history_memory_id", "memory_id"),
     )
 
     return HISTORY_TABLE
@@ -48,7 +48,7 @@ def get_messages_table(table_metadata: MetaData, prefix: str = "") -> Any:
         Column("content", Text, nullable=True),
         Column("name", String(191), nullable=True),
         Column("created_at_tz", TIMESTAMP(timezone=True), nullable=True),
-        Index("ix_messages_scope_created", "session_scope", "created_at_tz"),
+        Index(prefix + "ix_messages_scope_created", "session_scope", "created_at_tz"),
     )
 
     return MESSAGES_TABLE
