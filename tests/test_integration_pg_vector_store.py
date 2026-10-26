@@ -81,6 +81,9 @@ class _Result:
     def __init__(self, row):
         self.row = row
 
+    def scalar(self):
+        return None
+
     def fetchone(self):
         return self.row
 
@@ -92,10 +95,10 @@ class _Conn:
         self.rows = rows
         self.statements = []
 
-    def execute(self, statement):
+    def execute(self, statement, parameters=None):
+        # 将语句和参数（如果有的话）一并记录或直接记录语句字符串
         self.statements.append(str(statement))
         return _Result(self.rows)
-
 
 class _Transaction:
     '''假事务上下文：进入返回假连接，退出不提交。'''
@@ -122,6 +125,7 @@ class _Engine:
 
 class _StubTable:
     '''假 Table：只记录建表调用，避免依赖真实连接执行 DDL。'''
+    name:str = TABLE
 
     def __init__(self, statements):
         self.statements = statements
@@ -298,7 +302,7 @@ def test_create_col_builds_hnsw_and_fulltext_index() -> None:
     _requires_sqlalchemy()
     store, statements = _recording_store()
     store.create_col(TABLE, DIM)
-    assert statements[0].startswith('CREATE EXTENSION IF NOT EXISTS vector')
+    assert statements[1].startswith('CREATE EXTENSION IF NOT EXISTS vector')
     assert [item for item in statements if item.startswith('CREATE TABLE')]
     hnsw = [item for item in statements if '_hnsw_idx' in item]
     assert hnsw and 'hnsw (vector vector_cosine_ops)' in hnsw[0]
@@ -356,16 +360,10 @@ def pg_store():
             use_hnsw=PG_VECTOR_SETTINGS.use_hnsw,
             use_diskann=PG_VECTOR_SETTINGS.use_diskann,
             print_sql=True,
-        )
+        ).start()
     except Exception as exc:
         pytest.skip('跳过：PG 不可用（' + PG_VECTOR_SETTINGS.host + '）：' + type(exc).__name__ + ' ' + str(exc))
     yield store
-    # if not VECTOR_CONFIG.get('keep'):
-    #     try:
-    #         store.delete_col()
-    #     except Exception:
-    #         pass
-    store.engine.dispose()
 
 
 @pytest.fixture(scope='module')

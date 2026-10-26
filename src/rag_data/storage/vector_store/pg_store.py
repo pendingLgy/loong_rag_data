@@ -5,7 +5,6 @@ import logging
 from contextlib import contextmanager, asynccontextmanager
 from typing import Any, Dict, Iterator, List, Optional, AsyncIterator
 
-from sqlalchemy.sql.base import ReadOnlyColumnCollection
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
 from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, VectorStoreResult
@@ -13,7 +12,8 @@ from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, Vect
 logger = logging.getLogger(__name__)
 
 try:
-    import sqlalchemy as sa
+
+    from sqlalchemy import create_engine, cast, Numeric, desc, URL, inspect
     from sqlalchemy.orm import sessionmaker, Session
     from sqlalchemy import Table, Column, BigInteger, Text, MetaData, select, insert, update, delete, func, and_, or_, \
     not_, \
@@ -73,7 +73,7 @@ def _build_sqlalchemy_filter(table: Table, filters: Optional[Dict[str, Any]]) ->
                 is_numeric_op = op in ("gt", "gte", "lt", "lte")
                 if is_numeric_op and isinstance(op_val, (int, float)) and not is_direct:
                     # 使用 sa.cast 替代 as_numeric()，避免缺少 precision/scale 参数报错
-                    expr = sa.cast(table.c.metadata[key], sa.Numeric)
+                    expr = cast(table.c.metadata[key], Numeric)
                 else:
                     expr = col
 
@@ -141,36 +141,59 @@ class PGVectorStore(VectorStoreBase):
             pool_recycle: int = 1800,
             pool_pre_ping: bool = True,
     ) -> None:
+
+        self.connection_string = connection_string
+        self.collection_name = collection_name
+        self.vector_size = vector_size
+        self.database = database
+        self.user = user
+        self.password = password
+        self.host = host
+        self.port = port
+        self.use_hnsw = use_hnsw
+        self.use_diskann = use_diskann
+        self.print_sql = print_sql
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+        self.pool_pre_ping = pool_pre_ping
+
+        self.metadata_obj = MetaData()
+
+
+    def start(self) -> Any:
         if not _SQLALCHEMY_AVAILABLE:
             raise OptionalDependencyError(
                 '使用 SQLAlchemy PG 向量库需要安装 sqlalchemy 及 pgvector，请执行 pip install sqlalchemy pgvector'
             ) from _SQLALCHEMY_ERROR
 
-        if connection_string:
-            self.connection_string = connection_string
+        if self.connection_string:
+            self.connection_string = self.connection_string
         else:
-            self.connection_string = (
-                "postgresql://{user}:{password}@{host}:{port}/{database}"
-            ).format(user=user, password=password, host=host, port=port, database=database)
-
-        self.collection_name = collection_name
-        self.vector_size = vector_size
-        self.use_hnsw = use_hnsw
-        self.use_diskann = use_diskann
+            url = URL.create(
+                "postgresql",
+                username=self.user,
+                password=self.password,
+                host=self.host,
+                port=self.port,
+                database=self.database,
+            )
+            self.connection_string = url.render_as_string(hide_password=False)
 
         # 初始化 SQLAlchemy 引擎与元数据
         try:
-            self.engine: Engine = sa.create_engine(
+            self.engine: Engine = create_engine(
                 self.connection_string,
-                echo=print_sql,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_timeout=pool_timeout,
-                pool_recycle=pool_recycle,
-                pool_pre_ping=pool_pre_ping,
+                echo=self.print_sql,
+                pool_size=self.pool_size,
+                max_overflow=self.max_overflow,
+                pool_timeout=self.pool_timeout,
+                pool_recycle=self.pool_recycle,
+                pool_pre_ping=self.pool_pre_ping,
             )
 
-            if print_sql:
+            if self.print_sql:
                 # 开启 SQLAlchemy engine 和 pool 的调试日志
                 logging.basicConfig()
                 logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
@@ -179,8 +202,8 @@ class PGVectorStore(VectorStoreBase):
         except Exception as exc:
             raise StorageError('无法创建 SQLAlchemy 引擎：' + str(exc)) from exc
 
-        self.metadata_obj = MetaData()
-        self.create_col(collection_name, vector_size)
+        self.create_col(self.collection_name, self.vector_size)
+        return self
 
     # ---------------- 辅助方法 ----------------
 
@@ -202,7 +225,7 @@ class PGVectorStore(VectorStoreBase):
         where_clause = _build_sqlalchemy_filter(table, filters)
         if where_clause is not None:
             stmt = stmt.where(where_clause)
-        stmt = stmt.order_by(sa.desc("score")).limit(top_k)
+        stmt = stmt.order_by(desc("score")).limit(top_k)
         return stmt
 
     def _build_sql_search(self, filters: dict[str, Any] | None, top_k: int, vectors: list[float | int]) -> Select:
@@ -339,14 +362,25 @@ class PGVectorStore(VectorStoreBase):
     # ---------------- 集合管理 ----------------
 
     def create_col(self, name: str, vector_size: int, distance: MetricType = "COSINE") -> None:
-        """建表并初始化向量索引与全文索引；重复调用安全。"""
+        """同步方法：建表并初始化向量索引与全文索引；若表已存在则直接跳过后续所有操作。"""
         table = self._get_table()
+
         with self.engine.begin() as conn:
+
+            # 检查表是否存在（如果存在返回表名，不存在返回 None）
+            res = conn.execute(
+                text("SELECT to_regclass(:table_name)"),
+                {"table_name": table.name}
+            ).scalar()
+
+            if res is not None:
+                logger.info(f"table {table.name} is exist")
+                return
+
             conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
             table.create(conn, checkfirst=True)
 
             safe_name = self._col()
-            # 索引创建
             if self.use_diskann and vector_size < DISKANN_MAX_DIMENSION:
                 res = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vectorscale'")).fetchone()
                 if res:
@@ -475,46 +509,73 @@ class AsyncPGVectorStore(PGVectorStore):
             pool_recycle: int = 1800,
             pool_pre_ping: bool = True,
     ) -> None:
+
+        self.connection_string = connection_string
+        self.collection_name = collection_name
+        self.vector_size = vector_size
+        self.database = database
+        self.user = user
+        self.password = password
+        self.host = host
+        self.port = port
+        self.use_hnsw = use_hnsw
+        self.use_diskann = use_diskann
+        self.print_sql = print_sql
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
+        self.pool_timeout = pool_timeout
+        self.pool_recycle = pool_recycle
+        self.pool_pre_ping = pool_pre_ping
+
+        self.metadata_obj = MetaData()
+
+
+    async def start(self) -> Any:
         if not _SQLALCHEMY_AVAILABLE:
             raise OptionalDependencyError(
                 '使用异步 SQLAlchemy PG 向量库需要安装 sqlalchemy、asyncpg 及 pgvector'
             ) from _SQLALCHEMY_ERROR
 
-        if connection_string:
-            if connection_string.startswith("postgresql://"):
-                connection_string = connection_string.replace("postgresql://", "postgresql+asyncpg://", 1)
-            self.connection_string = connection_string
+        if self.connection_string:
+            parse_connection_string = self.connection_string
+            if self.connection_string.startswith("postgresql://"):
+                parse_connection_string = self.connection_string.replace("postgresql://", "postgresql+asyncpg://", 1)
+            self.connection_string = parse_connection_string
         else:
-            self.connection_string = (
-                "postgresql+asyncpg://{user}:{password}@{host}:{port}/{database}"
-            ).format(user=user, password=password, host=host, port=port, database=database)
-
-        self.collection_name = collection_name
-        self.vector_size = vector_size
-        self.use_hnsw = use_hnsw
-        self.use_diskann = use_diskann
+            url = URL.create(
+                "postgresql+asyncpg",
+                username=self.user,
+                password=self.password,
+                host=self.host,
+                port=self.port,
+                database=self.database,
+            )
+            self.connection_string = url.render_as_string(hide_password=False)
 
         try:
             self.engine: AsyncEngine = create_async_engine(
                 self.connection_string,
-                echo=print_sql,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_timeout=pool_timeout,
-                pool_recycle=pool_recycle,
-                pool_pre_ping=pool_pre_ping,
+                echo=self.print_sql,
+                pool_size=self.pool_size,
+                max_overflow=self.max_overflow,
+                pool_timeout=self.pool_timeout,
+                pool_recycle=self.pool_recycle,
+                pool_pre_ping=self.pool_pre_ping,
             )
 
-            if print_sql:
+            if self.print_sql:
                 # 开启 SQLAlchemy engine 和 pool 的调试日志
                 logging.basicConfig()
                 logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
 
             self.AsyncSessionLocal = async_sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
+
         except Exception as exc:
             raise StorageError('无法创建异步 SQLAlchemy 引擎：' + str(exc)) from exc
 
-        self.metadata_obj = MetaData()
+        await self.create_col(self.collection_name, self.vector_size)
+
+        return self
 
 
     @asynccontextmanager
@@ -530,6 +591,18 @@ class AsyncPGVectorStore(PGVectorStore):
     async def create_col(self, name: str, vector_size: int, distance: MetricType = "COSINE") -> None:
         table = self._get_table()
         async with self.engine.begin() as conn:
+
+            # 检查表是否存在（如果存在返回表名，不存在返回 None）
+            res = (await conn.execute(
+                text("SELECT to_regclass(:table_name)"),
+                {"table_name": table.name}
+            )).scalar()
+
+            if res is not None:
+                logger.info(f"table {table.name} is exist")
+                return
+
+            # 2. 表不存在，开始创建扩展与表
             await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
             await conn.run_sync(table.create, checkfirst=True)
 

@@ -125,7 +125,7 @@ async def async_pg_store():
     if not TABLE.startswith('autotest_'):
         pytest.skip('表名必须以 autotest_ 开头，当前为 ' + TABLE)
     try:
-        store = AsyncPGVectorStore(
+        store = await AsyncPGVectorStore(
             connection_string=PG_VECTOR_SETTINGS.connection_string,
             host=PG_VECTOR_SETTINGS.host,
             port=PG_VECTOR_SETTINGS.port,
@@ -137,9 +137,7 @@ async def async_pg_store():
             use_hnsw=PG_VECTOR_SETTINGS.use_hnsw,
             use_diskann=PG_VECTOR_SETTINGS.use_diskann,
             print_sql=False,
-        )
-        # 显式初始化建表（内部包含 extension 检查、table 创建及索引建立）
-        await store.create_col(TABLE, DIM)
+        ).start()
     except Exception as exc:
         pytest.skip('跳过：PG 异步服务不可用（' + PG_VECTOR_SETTINGS.host + '）：' + type(exc).__name__ + ' ' + str(exc))
 

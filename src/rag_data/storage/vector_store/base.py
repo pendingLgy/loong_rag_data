@@ -74,6 +74,10 @@ class VectorStoreBase(ABC):
             register_vector_store(name, cls)
 
     @abstractmethod
+    def start(self) -> Any:
+        """启动连接"""
+
+    @abstractmethod
     def create_col(self, name: str, vector_size: int, distance: MetricType = "COSINE") -> None:
         """新建集合（PG 中即建表）。"""
 
@@ -101,7 +105,7 @@ class VectorStoreBase(ABC):
     def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> Optional[List[VectorStoreResult]]:
         """列出集合内容（外层列表按既有约定包裹一层）。"""
 
+    @abstractmethod
     def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
         """关键字（BM25 或全文）检索；不支持的实现返回 None。"""
-        return None
 

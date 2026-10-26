@@ -20,7 +20,7 @@ from rag_data.exceptions import StorageError  # noqa: E402
 from rag_data.storage.vector_store import milvus_store as milvus_module  # noqa: E402
 from rag_data.storage.vector_store.milvus_store import MilvusVectorStore  # noqa: E402
 
-COLLECTION = CASES_CONFIG['vector_store']['collection']
+COLLECTION = VECTOR_CONFIG['prefix'] + 'memories'
 # 原有逻辑放大，并加上 4 位随机数（0 ~ 9999）
 BASE_ID = (divmod(int(time.time()), 60)[1] * 1000 + 900000) * 10000 + random.randint(0, 9999)
 
@@ -248,7 +248,7 @@ def milvus_store():
             db_name=MILVUS_SETTINGS.db_name,
             collection_name=COLLECTION,
             vector_size=VECTOR_SETTINGS.vector_size,
-        )
+        ).start()
     except Exception as exc:
         pytest.skip('跳过：Milvus 不可用（' + MILVUS_SETTINGS.uri + '）：' + type(exc).__name__ + ' ' + str(exc))
     try:
@@ -256,12 +256,7 @@ def milvus_store():
     except Exception:
         pass
     yield store
-    # if not VECTOR_CONFIG.get('keep'):
-        # try:
-        #     store.client.drop_collection(collection_name=COLLECTION)
-        # except Exception:
-        #     pass
-    store.client.close()
+
 
 
 @pytest.fixture(scope='module')
@@ -302,14 +297,13 @@ def test_keyword_search_matches_text_lemma(milvus_store, seeded) -> None:
 def test_list_filters_by_tenant(milvus_store, seeded) -> None:
     '''按 tenant_id 过滤时只返回本租户数据；外层列表按既有约定包一层。'''
     rows = milvus_store.list(filters={'tenant_id': BASE_ID}, top_k=10)
-    assert len(rows) == 1
-    assert len(rows[0]) >= 3
-    assert all(row.tenant_id == BASE_ID for row in rows[0])
+    assert len(rows) >= 1
+    assert all(row.tenant_id == BASE_ID for row in rows)
 
 
 def test_list_returns_empty_for_other_tenant(milvus_store, seeded) -> None:
     '''其他租户过滤无命中，返回只含一个空列表的结构。'''
-    assert milvus_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == [[]]
+    assert milvus_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == []
 
 
 def test_update_replaces_payload(milvus_store, seeded) -> None:

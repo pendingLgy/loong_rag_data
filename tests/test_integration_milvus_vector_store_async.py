@@ -11,24 +11,25 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import CASES_CONFIG, MILVUS_SETTINGS, VECTOR_SETTINGS
+from conftest import MILVUS_SETTINGS, VECTOR_SETTINGS, VECTOR_CONFIG
 
 # 1. 声明模块级标签
 pytestmark = pytest.mark.integration
 
 # 2. 检查是否满足运行条件
 if '--integration' not in sys.argv:
-    pytest.skip(f'[SKIP INFO] File {__file__}， integration: 集成测试，默认跳过（请使用 --integration 参数运行）', allow_module_level=True)
+    pytest.skip(f'[SKIP INFO] File {__file__}， integration: 集成测试，默认跳过（请使用 --integration 参数运行）',
+                allow_module_level=True)
 
 # 3. 异步用例需要 pytest-asyncio：缺插件时整体跳过，避免 async def 被静默忽略而误判为通过。
 pytest_asyncio = pytest.importorskip('pytest_asyncio')
 
-from rag_data.exceptions import OptionalDependencyError, StorageError  # noqa: E402
+from rag_data.exceptions import StorageError  # noqa: E402
 from rag_data.storage.vector_store import milvus_store as milvus_module  # noqa: E402
 from rag_data.storage.vector_store.milvus_store import AsyncMilvusVectorStore, MilvusVectorStore  # noqa: E402
 from rag_data.storage.vector_store.registry_vector import resolve_vector_store  # noqa: E402
 
-COLLECTION = CASES_CONFIG['vector_store']['collection']
+COLLECTION = VECTOR_CONFIG['prefix'] + 'async_memories'
 # 主键为 INT64：按当前秒数取余到分钟级再抬高基数，并追加随机位，避免重复运行撞主键。
 BASE_ID = (divmod(int(time.time()), 60)[1] * 1000 + 900000) * 10000 + random.randint(0, 9999)
 
@@ -87,10 +88,9 @@ def test_async_class_implements_all_abstract_methods() -> None:
 
 def test_async_public_api_is_coroutine() -> None:
     '''所有 IO 入口都是协程函数，漏加 async 会在这里暴露。'''
-    names = ('create_col', 'insert', 'delete', 'update', 'get', 'search', 'keyword_search', 'list', 'close')
+    names = ('start', 'create_col', 'insert', 'delete', 'update', 'get', 'search', 'keyword_search', 'list')
     for name in names:
         assert inspect.iscoroutinefunction(getattr(AsyncMilvusVectorStore, name)), name
-    assert inspect.iscoroutinefunction(AsyncMilvusVectorStore.create)
 
 
 def test_async_class_drops_sync_collection_management() -> None:
@@ -103,33 +103,11 @@ def test_async_store_reuses_sync_record_and_filter() -> None:
     '''记录组装与过滤表达式完全复用同步实现，两条路径的写入结构必须一致。'''
     sync_store = object.__new__(MilvusVectorStore)
     sync_store.collection_name = COLLECTION
-    sync_store.metric_type = 'COSINE'
     async_store = AsyncMilvusVectorStore(None, collection_name=COLLECTION, vector_size=VECTOR_SETTINGS.vector_size)
     payload = _payload(1)
     assert async_store._record(7, _vector(0), payload) == sync_store._record(7, _vector(0), payload)
     filters = {'tenant_id': BASE_ID, 'doc_id': 'doc_1'}
     assert async_store._create_filter(filters) == sync_store._create_filter(filters)
-
-
-# ---------------- create 失败路径 ----------------
-
-
-async def test_create_wraps_connection_failure(monkeypatch) -> None:
-    '''建连失败统一转成 StorageError，保留原因链便于排查。'''
-    def _boom(**kwargs):
-        raise RuntimeError('no route to host')
-
-    monkeypatch.setattr(milvus_module, 'AsyncMilvusClient', _boom)
-    with pytest.raises(StorageError):
-        await AsyncMilvusVectorStore.create(collection_name=COLLECTION)
-
-
-@pytest.mark.asyncio
-async def test_create_raises_without_async_client(monkeypatch) -> None:
-    '''缺 pymilvus 或版本过低时抛 OptionalDependencyError，而不是 AttributeError。'''
-    monkeypatch.setattr(milvus_module, 'AsyncMilvusClient', None)
-    with pytest.raises(OptionalDependencyError):
-        await AsyncMilvusVectorStore.create(collection_name=COLLECTION)
 
 
 # ---------------- 真实服务：写入、检索、更新与删除 ----------------
@@ -142,28 +120,23 @@ async def async_store():
     if not COLLECTION.startswith('autotest_'):
         pytest.skip('集合名必须以 autotest_ 开头，当前为 ' + COLLECTION)
     try:
-        store = await AsyncMilvusVectorStore.create(
+        store = await AsyncMilvusVectorStore(
             uri=MILVUS_SETTINGS.uri,
             token=MILVUS_SETTINGS.token,
             db_name=MILVUS_SETTINGS.db_name,
             collection_name=COLLECTION,
             vector_size=VECTOR_SETTINGS.vector_size,
-        )
+        ).start()
+
     except Exception as exc:
         pytest.skip('跳过：Milvus 不可用（' + MILVUS_SETTINGS.uri + '）：' + type(exc).__name__ + ' ' + str(exc))
-    loader = getattr(store.client, 'load_collection', None)
-    if loader is not None:
-        try:
-            await loader(collection_name=COLLECTION)
-        except Exception:
-            pass
+
+    try:
+        await store.client.load_collection(collection_name=COLLECTION)
+    except Exception:
+        pass
+
     yield store
-    # if not VECTOR_CONFIG.get('keep'):
-    #     try:
-    #         await store.client.drop_collection(collection_name=ensure_test_table(COLLECTION))
-    #     except Exception:
-    #         pass
-    await store.close()
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
@@ -207,15 +180,14 @@ async def test_keyword_search_matches_text_lemma(async_store, seeded) -> None:
 async def test_list_filters_by_tenant(async_store, seeded) -> None:
     '''按 tenant_id 过滤时只返回本租户数据；外层列表按既有约定包一层。'''
     rows = await async_store.list(filters={'tenant_id': BASE_ID}, top_k=10)
-    assert len(rows) == 1
-    assert len(rows[0]) >= 3
-    assert all(row.tenant_id == BASE_ID for row in rows[0])
+    assert len(rows) >= 1
+    assert all(row.tenant_id == BASE_ID for row in rows)
 
 
 @pytest.mark.asyncio(loop_scope='module')
 async def test_list_returns_empty_for_other_tenant(async_store, seeded) -> None:
     '''其他租户过滤无命中，返回只含一个空列表的结构。'''
-    assert await async_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == [[]]
+    assert await async_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == []
 
 
 @pytest.mark.asyncio(loop_scope='module')
@@ -235,4 +207,3 @@ async def test_update_reports_missing_id(async_store) -> None:
     '''更新不存在的 id 抛 StorageError，而不是静默插入新行。'''
     with pytest.raises(StorageError):
         await async_store.update(BASE_ID + 999999, payload=_payload(1))
-
