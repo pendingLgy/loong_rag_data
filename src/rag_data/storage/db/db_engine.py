@@ -3,36 +3,39 @@
 from __future__ import annotations
 
 import logging
-
 from abc import abstractmethod
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Iterator
 
-from sqlalchemy import delete, inspect, insert, select
+from sqlalchemy import delete, insert, select, MetaData
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from rag_data.exceptions import ConfigError, StorageError
 from rag_data.storage.db.base import BaseDB
-from rag_data.storage.db.schema import HISTORY_TABLE, MESSAGES_TABLE, METADATA, HistoryRecord, Message
+from rag_data.storage.db.schema import HistoryRecord, Message, get_history_table, get_messages_table
 from rag_data.storage.db.snowflake import next_id
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import DBSettings
+    from rag_data.config import DBSettings, SQLiteSettings
 
 
 class DBEngine(BaseDB):
     """基于 SQLAlchemy Core 的通用实现：单引擎加互斥锁，方言差异由子类提供连接串。"""
 
-    def __init__(self) -> None:
+    def __init__(self, table_prefix: str = "") -> None:
         self.engine = None
         self.SessionLocal = None
+        self.table_prefix = table_prefix
 
-        """创建并返回 SQLAlchemy 引擎。"""
+        # 元数据与两张表；建表 DDL 由 SQLAlchemy 按所用方言生成。
+        self.METADATA = MetaData()
+        self.history_table = get_history_table(self.METADATA, table_prefix)
+        self.messages_table = get_messages_table(self.METADATA, table_prefix)
 
     def _init_db(self, engine, sessionLocal):
         self.engine = engine
@@ -52,10 +55,9 @@ class DBEngine(BaseDB):
         finally:
             session.close()
 
+    @abstractmethod
     def _missing_tables(self) -> List[Any]:
         """启动时检查：返回尚未建表的数据表列表。"""
-        inspector = inspect(self.engine)
-        return [table for table in METADATA.sorted_tables if not inspector.has_table(table.name)]
 
     def _ensure_schema(self) -> None:
         """检查表是否存在，缺失的才创建；全部存在时不做任何写操作。"""
@@ -70,7 +72,7 @@ class DBEngine(BaseDB):
             raise StorageError("建表失败" + ": " + str(exc)) from exc
 
     def _record_row(self, record: HistoryRecord) -> Dict[str, Any]:
-        "把历史记录对象转换为可写入的行字典；id 缺省时生成雪花 ID。"
+        """把历史记录对象转换为可写入的行字典；id 缺省时生成雪花 ID。"""
         return {
             "id": record.id or next_id(),
             "memory_id": record.memory_id,
@@ -85,7 +87,7 @@ class DBEngine(BaseDB):
         }
 
     def _to_record(self, row: Dict[str, Any]) -> HistoryRecord:
-        "把数据库行转换为历史记录对象。"
+        """把数据库行转换为历史记录对象。"""
         return HistoryRecord(
             id=row.get("id"),
             memory_id=row.get("memory_id"),
@@ -100,7 +102,7 @@ class DBEngine(BaseDB):
         )
 
     def _message_row(self, message: Message) -> Dict[str, Any]:
-        "把消息对象转换为可写入的行字典。"
+        """把消息对象转换为可写入的行字典。"""
         return {
             "id": message.id or next_id(),
             "session_scope": message.session_scope,
@@ -111,7 +113,7 @@ class DBEngine(BaseDB):
         }
 
     def _to_message(self, row: Dict[str, Any]) -> Message:
-        "把数据库行转换为消息对象。"
+        """把数据库行转换为消息对象。"""
         return Message(
             id=row.get("id"),
             session_scope=row.get("session_scope"),
@@ -122,24 +124,24 @@ class DBEngine(BaseDB):
         )
 
     def add_history(self, record: HistoryRecord) -> HistoryRecord:
-        "追加一条历史记录，返回补全 id 后的对象。"
+        """追加一条历史记录，返回补全 id 后的对象。"""
         row = self._record_row(record)
         with self._session() as session:
-            session.execute(insert(HISTORY_TABLE).values(**row))
+            session.execute(insert(self.history_table).values(**row))
         return HistoryRecord(**row)
 
     def batch_add_history(self, records: List[HistoryRecord]) -> List[HistoryRecord]:
-        "批量追加历史记录，返回补全 id 后的对象列表。"
+        """批量追加历史记录，返回补全 id 后的对象列表。"""
         rows = [self._record_row(record) for record in records]
         if not rows:
             return []
         with self._session() as session:
-            session.execute(insert(HISTORY_TABLE), rows)
+            session.execute(insert(self.history_table), rows)
         return [HistoryRecord(**row) for row in rows]
 
     def get_history(self, memory_id: int) -> List[HistoryRecord]:
-        "按 memory_id 取历史，按时间升序。"
-        table = HISTORY_TABLE
+        """按 memory_id 取历史，按时间升序。"""
+        table = self.history_table
         stmt = (
             select(table)
             .where(table.c.memory_id == memory_id)
@@ -150,11 +152,11 @@ class DBEngine(BaseDB):
         return [self._to_record(dict(row)) for row in rows]
 
     def save_messages(self, messages: List[Message], keep_last: int = 10) -> List[Message]:
-        "写入消息，并只保留各会话最近的 keep_last 条。"
+        """写入消息，并只保留各会话最近的 keep_last 条。"""
         rows = [self._message_row(message) for message in messages]
         if not rows:
             return []
-        table = MESSAGES_TABLE
+        table = self.messages_table
         scopes = sorted({row["session_scope"] for row in rows})
         with self._session() as session:
             session.execute(insert(table), rows)
@@ -164,10 +166,13 @@ class DBEngine(BaseDB):
         return [self._to_message(row) for row in rows]
 
     def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
-        "按时间升序取会话最近 limit 条消息。"
-        table = MESSAGES_TABLE
+        """按时间升序取会话最近 limit 条消息。"""
+        table = self.messages_table
         recent = (
-            select(table.c.id, table.c.session_scope, table.c.role, table.c.content, table.c.name, table.c.created_at_tz)
+            select(
+                table.c.id, table.c.session_scope, table.c.role,
+                table.c.content, table.c.name, table.c.created_at_tz,
+            )
             .where(table.c.session_scope == session_scope)
             .order_by(table.c.created_at_tz.desc(), table.c.id.desc())
             .limit(limit)
@@ -179,8 +184,8 @@ class DBEngine(BaseDB):
         return [self._to_message(dict(row)) for row in rows]
 
     def _build_evict_stmt(self, session_scope: str, keep_last: int) -> Any:
-        "构造删除语句：保留会话最近 keep_last 条，其余删除。"
-        table = MESSAGES_TABLE
+        """构造删除语句：保留会话最近 keep_last 条，其余删除。"""
+        table = self.messages_table
         recent = (
             select(table.c.id)
             .where(table.c.session_scope == session_scope)
@@ -203,9 +208,15 @@ class DBEngine(BaseDB):
 class AsyncDBEngine(DBEngine):
     """基于 SQLAlchemy Core 的通用实现：单引擎加互斥锁，方言差异由子类提供连接串。"""
 
-    def __init__(self) -> None:
+    def __init__(self, table_prefix: str = "") -> None:
         self.engine = None
         self.AsyncSessionLocal = None
+        self.table_prefix = table_prefix
+
+        # 元数据与两张表；建表 DDL 由 SQLAlchemy 按所用方言生成。
+        self.METADATA = MetaData()
+        self.history_table = get_history_table(self.METADATA, table_prefix)
+        self.messages_table = get_messages_table(self.METADATA, table_prefix)
 
     async def _init_db(self, engine, asyncSessionLocal):
         self.engine = engine
@@ -248,24 +259,24 @@ class AsyncDBEngine(DBEngine):
     # ---------------- 历史记录 ----------------
 
     async def add_history(self, record: HistoryRecord) -> HistoryRecord:
-        "追加一条历史记录，返回补全 id 后的对象。"
+        """追加一条历史记录，返回补全 id 后的对象。"""
         row = self._record_row(record)
         async with self._session() as session:
-            await session.execute(insert(HISTORY_TABLE).values(**row))
+            await session.execute(insert(self.history_table).values(**row))
         return HistoryRecord(**row)
 
     async def batch_add_history(self, records: List[HistoryRecord]) -> List[HistoryRecord]:
-        "批量追加历史记录，返回补全 id 后的对象列表。"
+        """批量追加历史记录，返回补全 id 后的对象列表。"""
         rows = [self._record_row(record) for record in records]
         if not rows:
             return []
         async with self._session() as session:
-            await session.execute(insert(HISTORY_TABLE), rows)
+            await session.execute(insert(self.history_table), rows)
         return [HistoryRecord(**row) for row in rows]
 
     async def get_history(self, memory_id: int) -> List[HistoryRecord]:
-        "按 memory_id 取历史，按时间升序。"
-        table = HISTORY_TABLE
+        """按 memory_id 取历史，按时间升序。"""
+        table = self.history_table
         stmt = (
             select(table)
             .where(table.c.memory_id == memory_id)
@@ -279,11 +290,11 @@ class AsyncDBEngine(DBEngine):
     # ---------------- 会话消息 ----------------
 
     async def save_messages(self, messages: List[Message], keep_last: int = 10) -> List[Message]:
-        "写入消息，并只保留各会话最近的 keep_last 条。"
+        """写入消息，并只保留各会话最近的 keep_last 条。"""
         rows = [self._message_row(message) for message in messages]
         if not rows:
             return []
-        table = MESSAGES_TABLE
+        table = self.messages_table
         scopes = sorted({row["session_scope"] for row in rows})
         async with self._session() as session:
             await session.execute(insert(table), rows)
@@ -293,10 +304,13 @@ class AsyncDBEngine(DBEngine):
         return [self._to_message(row) for row in rows]
 
     async def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
-        "按时间升序取会话最近 limit 条消息。"
-        table = MESSAGES_TABLE
+        """按时间升序取会话最近 limit 条消息。"""
+        table = self.messages_table
         recent = (
-            select(table.c.id, table.c.session_scope, table.c.role, table.c.content, table.c.name, table.c.created_at_tz)
+            select(
+                table.c.id, table.c.session_scope, table.c.role,
+                table.c.content, table.c.name, table.c.created_at_tz,
+            )
             .where(table.c.session_scope == session_scope)
             .order_by(table.c.created_at_tz.desc(), table.c.id.desc())
             .limit(limit)
@@ -314,22 +328,20 @@ class AsyncDBEngine(DBEngine):
 
 # 按配置装配数据库实例：按 backend 选择方言，参数取自对应方言分区。
 # 方言实现按需惰性导入，避免与本模块形成导入环。
-
-
 def build_database(settings: "DBSettings") -> BaseDB:
-    """按 DBSettings.backend 构造对应方言的数据库实例。"""
+    """按 DBSettings.backend 构造对应方言的实例；异步后端的实例需调用方 await _start() 启动。"""
     backend = settings.backend
+    sqlite = settings.sqlite
+    mysql = settings.mysql
+    pg = settings.pg
+
     if backend == "sqlite":
         from rag_data.storage.db.sqlite_db import SQLiteDB
 
-        path = settings.sqlite.path
-        if not path:
-            raise ConfigError("未配置 SQLite 库文件路径：请设置 db.sqlite.path 或环境变量 RAG_DB__SQLITE__PATH")
-        return SQLiteDB(db_path=path)
+        return SQLiteDB(db_path=_sqlite_path(sqlite))
     if backend == "mysql":
         from rag_data.storage.db.mysql_db import MySQLDB
 
-        mysql = settings.mysql
         return MySQLDB(
             host=mysql.host,
             port=mysql.port,
@@ -338,14 +350,52 @@ def build_database(settings: "DBSettings") -> BaseDB:
             database=mysql.database,
             charset=mysql.charset,
         )
-    from rag_data.storage.db.pg_db import PGDB
+    if backend == "pg":
+        from rag_data.storage.db.pg_db import PGDB
 
-    pg = settings.pg
-    return PGDB(
-        connection_string=pg.connection_string or None,
-        host=pg.host,
-        port=pg.port,
-        user=pg.user,
-        password=pg.password,
-        database=pg.database,
-    )
+        return PGDB(
+            connection_string=pg.connection_string or None,
+            host=pg.host,
+            port=pg.port,
+            user=pg.user,
+            password=pg.password,
+            database=pg.database,
+        )
+
+    # ---------------- 异步后端：名字加 _async 后缀 ----------------
+
+    if backend == "sqlite_async":
+        from rag_data.storage.db.sqlite_db import AsyncSQLiteDB
+
+        return AsyncSQLiteDB(db_path=_sqlite_path(sqlite))
+    if backend == "mysql_async":
+        from rag_data.storage.db.mysql_db import AsyncMySQLDB
+
+        return AsyncMySQLDB(
+            host=mysql.host,
+            port=mysql.port,
+            user=mysql.user,
+            password=mysql.password,
+            database=mysql.database,
+            charset=mysql.charset,
+        )
+    if backend == "pg_async":
+        from rag_data.storage.db.pg_db import AsyncPGDB
+
+        return AsyncPGDB(
+            connection_string=pg.connection_string or None,
+            host=pg.host,
+            port=pg.port,
+            user=pg.user,
+            password=pg.password,
+            database=pg.database,
+        )
+
+    raise ConfigError("不支持的数据库后端：" + str(backend))
+
+
+def _sqlite_path(settings: "SQLiteSettings") -> str:
+    """取 SQLite 库文件路径；未配置时统一报错。"""
+    if not settings.path:
+        raise ConfigError("未配置 SQLite 库文件路径：请设置 db.sqlite.path 或环境变量 RAG_DB__SQLITE__PATH")
+    return settings.path

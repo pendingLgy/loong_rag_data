@@ -341,36 +341,6 @@ async def test_session_rolls_back_on_error():
     assert fake.rolled_back is True
 
 
-# ---------------- 真实服务（服务不可用时跳过） ----------------
-
-
-@pytest.mark.asyncio(loop_scope='module')
-async def test_async_mysql_service_creates_tables():
-    _requires_sqlalchemy()
-    from conftest import MYSQL_SETTINGS
-
-    store = AsyncMySQLDB(
-        host=MYSQL_SETTINGS.host,
-        port=MYSQL_SETTINGS.port,
-        user=MYSQL_SETTINGS.user,
-        password=MYSQL_SETTINGS.password,
-        database=MYSQL_SETTINGS.database,
-    )
-    try:
-        await store._start()
-    except Exception as exc:
-        pytest.skip('[SKIP INFO] MySQL 服务不可用：' + str(exc))
-
-    try:
-        # 验证真实环境下的初始化与建表逻辑
-        if hasattr(store, '_init_db') and hasattr(store, 'engine') and store.engine:
-            # 如果有显式的初始化方法且包含建表，可在此触发
-            pass
-        assert store.engine is not None
-    finally:
-        await store.engine.dispose()
-
-
 # ---------------- 父类 AsyncDBEngine 能力（真实 MySQL 连接） ----------------
 #
 # 父类逻辑与方言无关；这里连真实 MySQL，既验证父类流程，也验证 SQL 在真实方言下可执行。
@@ -378,6 +348,7 @@ async def test_async_mysql_service_creates_tables():
 # 每次运行用独立的标识，避免与既有数据或其他用例互相干扰。
 RUN_ID = int(time.time()) % 1000000
 HISTORY_MEMORY_ID = RUN_ID * 100 + 1
+TABLE_PREFIX = "async_"
 
 
 @pytest.fixture(scope="module")
@@ -392,6 +363,7 @@ async def live_store():
         user=MYSQL_SETTINGS.user,
         password=MYSQL_SETTINGS.password,
         database=MYSQL_SETTINGS.database,
+        table_prefix=TABLE_PREFIX,
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -578,7 +550,7 @@ async def test_parent_evict_stmt_returns_delete_statement(live_store):
     _requires_sqlalchemy()
     stmt = live_store._build_evict_stmt(EVICT_SCOPE, 2)
     assert isinstance(stmt, Delete)
-    assert stmt.table.name == 'messages'
+    assert stmt.table.name == TABLE_PREFIX + 'messages'
 
 
 @pytest.mark.asyncio(loop_scope='module')
@@ -586,7 +558,7 @@ async def test_parent_evict_stmt_compiles_for_scope_and_keep_last(live_store):
     _requires_sqlalchemy()
     stmt = live_store._build_evict_stmt(EVICT_SCOPE, 2)
     sql = str(stmt)
-    assert sql.startswith('DELETE FROM messages')
+    assert sql.startswith('DELETE FROM ' + TABLE_PREFIX + 'messages')
     assert 'NOT IN' in sql.upper()
     params = stmt.compile().params
     assert EVICT_SCOPE in params.values()

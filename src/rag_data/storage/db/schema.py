@@ -5,45 +5,53 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import BigInteger, Column, Index, MetaData, SmallInteger, String, Table, Text, TIMESTAMP
 
-# 元数据与两张表；建表 DDL 由 SQLAlchemy 按所用方言生成。
-METADATA = MetaData()
+HISTORY_TABLE_SUFFIX = "history"
+MESSAGES_TABLE_SUFFIX = "messages"
 
-HISTORY_TABLE = Table(
-    "history",
-    METADATA,
-    Column("id", BigInteger, primary_key=True),
-    Column("memory_id", BigInteger, nullable=True),
-    Column("old_memory", Text, nullable=True),
-    Column("new_memory", Text, nullable=True),
-    Column("event", String(32), nullable=True),
-    Column("created_at_tz", TIMESTAMP(timezone=True), nullable=True),
-    Column("updated_at_tz", TIMESTAMP(timezone=True), nullable=True),
-    Column("is_deleted", SmallInteger, nullable=False, default=0),
-    Column("actor_id", String(64), nullable=True),
-    Column("role", String(32), nullable=True),
-    Index("ix_history_memory_id", "memory_id"),
-)
 
-MESSAGES_TABLE = Table(
-    "messages",
-    METADATA,
-    Column("id", BigInteger, primary_key=True),
-    Column("session_scope", String(191), nullable=True),
-    Column("role", String(32), nullable=True),
-    Column("content", Text, nullable=True),
-    Column("name", String(191), nullable=True),
-    Column("created_at_tz", TIMESTAMP(timezone=True), nullable=True),
-    Index("ix_messages_scope_created", "session_scope", "created_at_tz"),
-)
+def get_history_table(table_metadata: MetaData, prefix: str = "") -> Any:
+    history_table_name = prefix + HISTORY_TABLE_SUFFIX
 
-# 列名清单，供外部核对。
-HISTORY_COLUMNS: List[str] = [column.name for column in HISTORY_TABLE.columns]
-MESSAGE_COLUMNS: List[str] = [column.name for column in MESSAGES_TABLE.columns]
+    HISTORY_TABLE = Table(
+        history_table_name,
+        table_metadata,
+        Column("id", BigInteger, primary_key=True),
+        Column("memory_id", BigInteger, nullable=True),
+        Column("old_memory", Text, nullable=True),
+        Column("new_memory", Text, nullable=True),
+        Column("event", String(32), nullable=True),
+        Column("created_at_tz", TIMESTAMP(timezone=True), nullable=True),
+        Column("updated_at_tz", TIMESTAMP(timezone=True), nullable=True),
+        Column("is_deleted", SmallInteger, nullable=False, default=0),
+        Column("actor_id", String(64), nullable=True),
+        Column("role", String(32), nullable=True),
+        Index("ix_history_memory_id", "memory_id"),
+    )
+
+    return HISTORY_TABLE
+
+
+def get_messages_table(table_metadata: MetaData, prefix: str = "") -> Any:
+    messages_table_name = prefix + MESSAGES_TABLE_SUFFIX
+
+    MESSAGES_TABLE = Table(
+        messages_table_name,
+        table_metadata,
+        Column("id", BigInteger, primary_key=True),
+        Column("session_scope", String(191), nullable=True),
+        Column("role", String(32), nullable=True),
+        Column("content", Text, nullable=True),
+        Column("name", String(191), nullable=True),
+        Column("created_at_tz", TIMESTAMP(timezone=True), nullable=True),
+        Index("ix_messages_scope_created", "session_scope", "created_at_tz"),
+    )
+
+    return MESSAGES_TABLE
 
 
 # ---------------- 数据对象 ----------------

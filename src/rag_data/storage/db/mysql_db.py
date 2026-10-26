@@ -14,7 +14,6 @@ from sqlalchemy.orm import sessionmaker
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
 from rag_data.storage.db.db_engine import DBEngine, AsyncDBEngine
-from rag_data.storage.db.schema import METADATA
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +54,7 @@ class MySQLDB(DBEngine):
                  pool_timeout: int = 30,
                  pool_recycle: int = 1800,
                  pool_pre_ping: bool = True,
+                 table_prefix: str = ""
                  ) -> None:
 
         self.connection_string = connection_string
@@ -70,7 +70,8 @@ class MySQLDB(DBEngine):
         self.pool_timeout = pool_timeout
         self.pool_recycle = pool_recycle
         self.pool_pre_ping = pool_pre_ping
-        super().__init__()
+        self.table_prefix = table_prefix
+        super().__init__(table_prefix=table_prefix)
 
     def _start(self) -> Engine:
         "用离散参数构造 URL，驱动名按可用库选择。"
@@ -114,11 +115,16 @@ class MySQLDB(DBEngine):
 
         self._init_db(self.engine, self.SessionLocal)
 
+        if self.print_sql:
+            # 开启 SQLAlchemy engine 和 pool 的调试日志
+            logging.basicConfig()
+            logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
+
         return self.engine
 
     def _missing_tables(self) -> List[Any]:
         """启动时检查：返回尚未建表的数据表列表（同步引擎，MySQL 语法）。"""
-        all_tables = list(METADATA.sorted_tables)
+        all_tables = list(self.METADATA.sorted_tables)
         table_names = [table.name for table in all_tables]
 
         if not table_names:
@@ -184,6 +190,7 @@ class AsyncMySQLDB(AsyncDBEngine):
                  pool_timeout: int = 30,
                  pool_recycle: int = 1800,
                  pool_pre_ping: bool = True,
+                 table_prefix: str = ""
                  ) -> None:
 
         self.connection_string = connection_string
@@ -199,7 +206,8 @@ class AsyncMySQLDB(AsyncDBEngine):
         self.pool_timeout = pool_timeout
         self.pool_recycle = pool_recycle
         self.pool_pre_ping = pool_pre_ping
-        super().__init__()
+        self.table_prefix = table_prefix
+        super().__init__(table_prefix=table_prefix)
 
     async def _start(self) -> AsyncEngine:
         "用离散参数构造 URL，驱动名按可用库选择。"
@@ -245,15 +253,23 @@ class AsyncMySQLDB(AsyncDBEngine):
                 class_=AsyncSession,
                 expire_on_commit=False
             )
+
             await self._init_db(self.engine, self.AsyncSessionLocal)
 
-            return self.engine
+            if self.print_sql:
+                # 开启 SQLAlchemy engine 和 pool 的调试日志
+                logging.basicConfig()
+                logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
+
         except Exception as exc:
             raise StorageError(f"无法创建异步 MySQL 引擎：{exc}") from exc
 
+        return self.engine
+
+
     async def _missing_tables(self) -> List[Any]:
         """启动时检查：返回尚未建表的数据表列表（兼容异步引擎，MySQL 语法）。"""
-        all_tables = list(METADATA.sorted_tables)
+        all_tables = list(self.METADATA.sorted_tables)
         table_names = [table.name for table in all_tables]
 
         if not table_names:
