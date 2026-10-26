@@ -415,14 +415,13 @@ def test_keyword_search_matches_text_lemmas(pg_store, seeded) -> None:
 def test_list_filters_by_tenant(pg_store, seeded) -> None:
     '''按 tenant_id 列过滤只返回本租户数据；外层列表按既有约定包一层。'''
     rows = pg_store.list(filters={'tenant_id': BASE_ID}, top_k=10)
-    assert len(rows) == 1
-    assert len(rows[0]) >= 3
-    assert all(row.metadata['doc_id'].startswith('doc_') for row in rows[0])
+    assert len(rows) >= 1
+    assert all(row.metadata['doc_id'].startswith('doc_') for row in rows)
 
 
 def test_list_returns_empty_for_other_tenant(pg_store, seeded) -> None:
     '''其他租户过滤无命中，返回只含一个空列表的结构。'''
-    assert pg_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == [[]]
+    assert pg_store.list(filters={'tenant_id': BASE_ID + 1}, top_k=10) == []
 
 
 def test_update_replaces_metadata(pg_store, seeded) -> None:

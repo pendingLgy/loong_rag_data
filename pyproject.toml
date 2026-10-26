@@ -38,10 +38,15 @@ parsers = [
 ]
 embedding = ["sentence-transformers>=2.5"]
 milvus = ["pymilvus>=2.3"]
-sqlalchemy = ["SQLAlchemy>=2.0"]
+sqlalchemy = [
+  "SQLAlchemy>=2.0",
+  "greenlet>=3.5.6",
+]
+
 pg = [
   "psycopg[binary]>=3.1",
-  "pgvector>=0.5.1"
+  "pgvector>=0.5.1",
+  "asyncpg>=0.32.0"
 ]
 mysql = ["pymysql>=1.1"]
 epub = [
@@ -130,6 +135,7 @@ allow-direct-references = true
 testpaths = ["tests"]
 
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
 
 markers = [
   "integration: 集成测试，默认跳过",

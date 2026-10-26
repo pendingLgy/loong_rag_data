@@ -17,6 +17,7 @@ BUILTIN_STORES: Dict[str, str] = {
     "milvus": "rag_data.storage.vector_store.milvus_store.MilvusVectorStore",
     "milvus_async": "rag_data.storage.vector_store.milvus_store.AsyncMilvusVectorStore",
     "pg": "rag_data.storage.vector_store.pg_store.PGVectorStore",
+    "pg_async": "rag_data.storage.vector_store.pg_store.AsyncPGVectorStore",
 }
 
 _REGISTRY = Registry("向量库后端", BUILTIN_STORES)

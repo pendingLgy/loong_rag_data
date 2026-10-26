@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional
+from contextlib import contextmanager, asynccontextmanager
+from typing import Any, Dict, Iterator, List, Optional, AsyncIterator
+
+from sqlalchemy.sql.base import ReadOnlyColumnCollection
 
 from rag_data.exceptions import OptionalDependencyError, StorageError
-from rag_data.storage.guard import ensure_test_table
 from rag_data.storage.vector_store.base import MetricType, VectorStoreBase, VectorStoreResult
 
 logger = logging.getLogger(__name__)
@@ -15,11 +16,12 @@ try:
     import sqlalchemy as sa
     from sqlalchemy.orm import sessionmaker, Session
     from sqlalchemy import Table, Column, BigInteger, Text, MetaData, select, insert, update, delete, func, and_, or_, \
-        not_, \
-        text, Engine
+    not_, \
+    text, Engine, Select, Delete, Update
     from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
     from sqlalchemy.exc import SQLAlchemyError
     from pgvector.sqlalchemy import Vector
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession, AsyncEngine
 
     _SQLALCHEMY_AVAILABLE = True
     _SQLALCHEMY_ERROR = None
@@ -133,6 +135,11 @@ class PGVectorStore(VectorStoreBase):
             use_hnsw: bool = True,
             use_diskann: bool = False,
             print_sql: bool = False,
+            pool_size: int = 10,
+            max_overflow: int = 20,
+            pool_timeout: int = 30,
+            pool_recycle: int = 1800,
+            pool_pre_ping: bool = True,
     ) -> None:
         if not _SQLALCHEMY_AVAILABLE:
             raise OptionalDependencyError(
@@ -153,7 +160,21 @@ class PGVectorStore(VectorStoreBase):
 
         # 初始化 SQLAlchemy 引擎与元数据
         try:
-            self.engine: Engine = sa.create_engine(self.connection_string, echo=print_sql)
+            self.engine: Engine = sa.create_engine(
+                self.connection_string,
+                echo=print_sql,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_timeout=pool_timeout,
+                pool_recycle=pool_recycle,
+                pool_pre_ping=pool_pre_ping,
+            )
+
+            if print_sql:
+                # 开启 SQLAlchemy engine 和 pool 的调试日志
+                logging.basicConfig()
+                logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
+
             self.SessionLocal = sessionmaker(bind=self.engine)
         except Exception as exc:
             raise StorageError('无法创建 SQLAlchemy 引擎：' + str(exc)) from exc
@@ -162,6 +183,118 @@ class PGVectorStore(VectorStoreBase):
         self.create_col(collection_name, vector_size)
 
     # ---------------- 辅助方法 ----------------
+
+    def _build_sql_keyword_search(self, filters: dict[str, Any] | None, query: str, top_k: int) -> Select:
+
+        table = self._get_table()
+        query_expression = query.replace(" ", " | ")
+        ts_query = func.to_tsquery('simple', query_expression)
+        ts_vector = func.to_tsvector('simple', table.c.text_lemma)
+        score_expr = func.ts_rank_cd(ts_vector, ts_query).label("score")
+
+        stmt = select(
+            table.c.id, table.c.tenant_id, table.c.user_id,
+            table.c.text, table.c.text_lemma,
+            table.c.updated_at_tz, table.c.created_at_tz,
+            score_expr, table.c.metadata
+        ).where(ts_vector.bool_op('@@')(ts_query))
+
+        where_clause = _build_sqlalchemy_filter(table, filters)
+        if where_clause is not None:
+            stmt = stmt.where(where_clause)
+        stmt = stmt.order_by(sa.desc("score")).limit(top_k)
+        return stmt
+
+    def _build_sql_search(self, filters: dict[str, Any] | None, top_k: int, vectors: list[float | int]) -> Select:
+        table = self._get_table()
+        score_expr = table.c.vector.cosine_distance(vectors).label("score")
+        stmt = select(
+            table.c.id,
+            table.c.tenant_id,
+            table.c.user_id,
+            table.c.text,
+            table.c.text_lemma,
+            table.c.updated_at_tz,
+            table.c.created_at_tz,
+            score_expr,
+            table.c.metadata)
+
+        where_clause = _build_sqlalchemy_filter(table, filters)
+        if where_clause is not None:
+            stmt = stmt.where(where_clause)
+
+        stmt = stmt.order_by("score").limit(top_k)
+        return stmt
+
+
+    def _build_sql_insert(self, ids: list[int], payloads: list[dict[str, Any]], vectors: list[list[float | int]]) -> list:
+        rows = [
+            {
+                "id": rid,
+                "tenant_id": item.get("tenant_id"),
+                "user_id": item.get("user_id"),
+                "vector": vector,
+                "metadata": item.get("metadata"),
+                "text": item.get("text"),
+                "text_lemma": item.get("text_lemma"),
+                "updated_at_tz": item.get("updated_at_tz"),
+                "created_at_tz": item.get("created_at_tz"),
+            }
+            for rid, vector, item in zip(ids, vectors, payloads)
+        ]
+        return rows
+
+    def _build_sql_delete(self, id: int) -> Delete:
+        table = self._get_table()
+        stmt = delete(table).where(table.c.id == id)
+        return stmt
+
+    def _build_sql_update(self, id: int, payload: dict[str, Any] | None,
+                          vector: list[float | int] | None) -> Update:
+
+        table = self._get_table()
+
+        update_data = {}
+        if vector is not None:
+            update_data["vector"] = vector
+        if payload is not None:
+            update_data["metadata"] = payload
+
+        stmt = update(table).where(table.c.id == id).values(**update_data)
+        return stmt
+
+    def _build_sql_get(self, id: int) -> Select[Any, Any, Any, Any, Any, Any, Any, Any] | Select[*tuple[Any, ...]]:
+        table = self._get_table()
+        stmt = (select(
+            table.c.id,
+            table.c.tenant_id,
+            table.c.user_id,
+            table.c.text,
+            table.c.text_lemma,
+            table.c.updated_at_tz,
+            table.c.created_at_tz,
+            table.c.metadata
+        ).where(table.c.id == id))
+        return stmt
+
+
+    def _build_sql_list(self, filters: dict[str, Any] | None, top_k: int | None) -> Select:
+        table = self._get_table()
+        stmt = select(table.c.id,
+                      table.c.tenant_id,
+                      table.c.user_id,
+                      table.c.text,
+                      table.c.text_lemma,
+                      table.c.updated_at_tz,
+                      table.c.created_at_tz,
+                      table.c.metadata)
+
+        where_clause = _build_sqlalchemy_filter(table, filters)
+        if where_clause is not None:
+            stmt = stmt.where(where_clause)
+
+        stmt = stmt.limit(top_k or 100)
+        return stmt
 
     def _col(self) -> str:
         "返回经校验的安全表名。"
@@ -231,20 +364,7 @@ class PGVectorStore(VectorStoreBase):
     def insert(self, vectors: List[List[float]], payloads: List[Dict[str, Any]], ids: List[int]) -> None:
         "批量写入。"
         table = self._get_table()
-        rows = [
-            {
-                "id": rid,
-                "tenant_id": item.get("tenant_id"),
-                "user_id": item.get("user_id"),
-                "vector": vector,
-                "metadata": item.get("metadata"),
-                "text": item.get("text"),
-                "text_lemma": item.get("text_lemma"),
-                "updated_at_tz": item.get("updated_at_tz"),
-                "created_at_tz": item.get("created_at_tz"),
-            }
-            for rid, vector, item in zip(ids, vectors, payloads)
-        ]
+        rows = self._build_sql_insert(ids, payloads, vectors)
         with self._session() as session:
             session.execute(insert(table), rows)
 
@@ -258,26 +378,8 @@ class PGVectorStore(VectorStoreBase):
         store = VectorStoreResult.to_vector_store_result(**row_dict)
         return store
 
-    def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> \
-            List[VectorStoreResult]:
-        table = self._get_table()
-        score_expr = table.c.vector.cosine_distance(vectors).label("score")
-        stmt = select(
-            table.c.id,
-            table.c.tenant_id,
-            table.c.user_id,
-            table.c.text,
-            table.c.text_lemma,
-            table.c.updated_at_tz,
-            table.c.created_at_tz,
-            score_expr,
-            table.c.metadata)
-
-        where_clause = _build_sqlalchemy_filter(table, filters)
-        if where_clause is not None:
-            stmt = stmt.where(where_clause)
-
-        stmt = stmt.order_by("score").limit(top_k)
+    def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
+        stmt = self._build_sql_search(filters, top_k, vectors)
 
         with self._session() as session:
             rows = session.execute(stmt).fetchall()
@@ -290,29 +392,8 @@ class PGVectorStore(VectorStoreBase):
 
     def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
         "基于 text_lemma 的全文检索；失败返回 None。"
-        table = self._get_table()
-        query_expression = query.replace(" ", " | ")
 
-        ts_query = func.to_tsquery('simple', query_expression)
-        ts_vector = func.to_tsvector('simple', table.c.text_lemma)
-        score_expr = func.ts_rank_cd(ts_vector, ts_query).label("score")
-
-        stmt = select(
-            table.c.id,
-            table.c.tenant_id,
-            table.c.user_id,
-            table.c.text,
-            table.c.text_lemma,
-            table.c.updated_at_tz,
-            table.c.created_at_tz,
-            score_expr,
-            table.c.metadata).where(ts_vector.bool_op('@@')(ts_query))
-
-        where_clause = _build_sqlalchemy_filter(table, filters)
-        if where_clause is not None:
-            stmt = stmt.where(where_clause)
-
-        stmt = stmt.order_by(sa.desc("score")).limit(top_k)
+        stmt = self._build_sql_keyword_search(filters, query, top_k)
 
         try:
             with self._session() as session:
@@ -331,57 +412,206 @@ class PGVectorStore(VectorStoreBase):
         return results
 
     def delete(self, id: int) -> None:
-        table = self._get_table()
-        stmt = delete(table).where(table.c.id == id)
+        stmt = self._build_sql_delete(id)
         with self._session() as session:
             session.execute(stmt)
 
-    def update(self, id: int, vector: Optional[List[float]] = None,
-               payload: Optional[Dict[str, Any]] = None) -> None:
-        table = self._get_table()
-        update_data = {}
-        if vector is not None:
-            update_data["vector"] = vector
-        if payload is not None:
-            update_data["metadata"] = payload
 
-        if update_data:
-            stmt = update(table).where(table.c.id == id).values(**update_data)
-            with self._session() as session:
-                session.execute(stmt)
+    def update(self, id: int, vector: Optional[List[float]] = None,payload: Optional[Dict[str, Any]] = None) -> None:
+        if vector is None and payload is None:
+            logger.warning("param is null")
+            return
+
+        stmt = self._build_sql_update(id, payload, vector)
+
+        with self._session() as session:
+            session.execute(stmt)
+
 
     def get(self, id: int) -> Optional[VectorStoreResult]:
-        table = self._get_table()
-        stmt = (select(
-            table.c.id,
-            table.c.tenant_id,
-            table.c.user_id,
-            table.c.text,
-            table.c.text_lemma,
-            table.c.updated_at_tz,
-            table.c.created_at_tz,
-            table.c.metadata
-        ).where(table.c.id == id))
+        stmt = self._build_sql_get(id)
         with self._session() as session:
             row = session.execute(stmt).fetchone()
         if not row:
             return None
-
         return self._parse(row._asdict())
 
-    def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> List[
-        List[VectorStoreResult]]:
-        table = self._get_table()
-        stmt = select(table.c.id, table.c.metadata)
-
-        where_clause = _build_sqlalchemy_filter(table, filters)
-        if where_clause is not None:
-            stmt = stmt.where(where_clause)
-
-        stmt = stmt.limit(top_k or 100)
-
+    def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> Optional[List[VectorStoreResult]]:
+        stmt = self._build_sql_list(filters, top_k)
         with self._session() as session:
             rows = session.execute(stmt).fetchall()
 
-        results = [VectorStoreResult.to_vector_store_result(id=row[0], metadata=row[1]) for row in rows]
-        return [results]
+        results: List[VectorStoreResult] = []
+        for row in rows:
+            row_dict = row._asdict()
+            results.append(self._parse(row_dict))
+        return results
+
+
+
+
+class AsyncPGVectorStore(PGVectorStore):
+    """基于 PostgreSQL、pgvector 与 SQLAlchemy Asyncio 的异步向量库实现；表即集合。"""
+
+    backend = "pg_async"
+    metric_type = "COSINE"
+
+    def __init__(
+            self,
+            connection_string: Optional[str] = None,
+            collection_name: str = "rag_data",
+            vector_size: int = 1024,
+            database: str = "postgres",
+            user: str = "postgres",
+            password: str = "",
+            host: str = "localhost",
+            port: int = 5432,
+            use_hnsw: bool = True,
+            use_diskann: bool = False,
+            print_sql: bool = False,
+            pool_size: int = 10,
+            max_overflow: int = 20,
+            pool_timeout: int = 30,
+            pool_recycle: int = 1800,
+            pool_pre_ping: bool = True,
+    ) -> None:
+        if not _SQLALCHEMY_AVAILABLE:
+            raise OptionalDependencyError(
+                '使用异步 SQLAlchemy PG 向量库需要安装 sqlalchemy、asyncpg 及 pgvector'
+            ) from _SQLALCHEMY_ERROR
+
+        if connection_string:
+            if connection_string.startswith("postgresql://"):
+                connection_string = connection_string.replace("postgresql://", "postgresql+asyncpg://", 1)
+            self.connection_string = connection_string
+        else:
+            self.connection_string = (
+                "postgresql+asyncpg://{user}:{password}@{host}:{port}/{database}"
+            ).format(user=user, password=password, host=host, port=port, database=database)
+
+        self.collection_name = collection_name
+        self.vector_size = vector_size
+        self.use_hnsw = use_hnsw
+        self.use_diskann = use_diskann
+
+        try:
+            self.engine: AsyncEngine = create_async_engine(
+                self.connection_string,
+                echo=print_sql,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                pool_timeout=pool_timeout,
+                pool_recycle=pool_recycle,
+                pool_pre_ping=pool_pre_ping,
+            )
+
+            if print_sql:
+                # 开启 SQLAlchemy engine 和 pool 的调试日志
+                logging.basicConfig()
+                logging.getLogger("sqlalchemy.pool").setLevel(logging.INFO)
+
+            self.AsyncSessionLocal = async_sessionmaker(bind=self.engine, class_=AsyncSession, expire_on_commit=False)
+        except Exception as exc:
+            raise StorageError('无法创建异步 SQLAlchemy 引擎：' + str(exc)) from exc
+
+        self.metadata_obj = MetaData()
+
+
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[AsyncSession]:
+        async with self.AsyncSessionLocal() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    async def create_col(self, name: str, vector_size: int, distance: MetricType = "COSINE") -> None:
+        table = self._get_table()
+        async with self.engine.begin() as conn:
+            await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+            await conn.run_sync(table.create, checkfirst=True)
+
+            safe_name = self._col()
+            if self.use_diskann and vector_size < DISKANN_MAX_DIMENSION:
+                res = await conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vectorscale'"))
+                if res.fetchone():
+                    await conn.execute(text(
+                        f"CREATE INDEX IF NOT EXISTS {safe_name}_diskann_idx ON {safe_name} USING diskann (vector)"))
+            elif self.use_hnsw:
+                await conn.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS {safe_name}_hnsw_idx ON {safe_name} USING hnsw (vector vector_cosine_ops)"))
+
+            await conn.execute(
+                text(f"CREATE INDEX IF NOT EXISTS {safe_name}_text_idx ON {safe_name} USING gin ({_TEXT_VECTOR})"))
+
+    async def insert(self, vectors: List[List[float]], payloads: List[Dict[str, Any]], ids: List[int]) -> None:
+        table = self._get_table()
+        rows = self._build_sql_insert(ids, payloads, vectors)
+
+        async with self._session() as session:
+            await session.execute(insert(table), rows)
+
+    async def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
+
+        stmt = self._build_sql_search(filters, top_k, vectors)
+
+        async with self._session() as session:
+            result = await session.execute(stmt)
+            rows = result.fetchall()
+
+        return [self._parse(row._asdict()) for row in rows]
+
+    async def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
+        stmt = self._build_sql_keyword_search(filters, query, top_k)
+
+        try:
+            async with self._session() as session:
+                result = await session.execute(stmt)
+                rows = result.fetchall()
+        except Exception:
+            import traceback
+            logger.error(f"异步全文检索执行失败：\n{traceback.format_exc()}")
+            return None
+
+        return [self._parse(row._asdict()) for row in rows]
+
+
+    async def delete(self, id: int) -> None:
+        stmt = self._build_sql_delete(id)
+        async with self._session() as session:
+            await session.execute(stmt)
+
+    async def update(self, id: int, vector: Optional[List[float]] = None, payload: Optional[Dict[str, Any]] = None) -> None:
+
+        if vector is None and payload is None:
+            logger.warning("param is null")
+            return
+
+        stmt = self._build_sql_update(id, payload, vector)
+
+        async with self._session() as session:
+            await session.execute(stmt)
+
+    async def get(self, id: int) -> Optional[VectorStoreResult]:
+        stmt = self._build_sql_get(id)
+        async with self._session() as session:
+            result = await session.execute(stmt)
+            row = result.fetchone()
+        if not row:
+            return None
+        return self._parse(row._asdict())
+
+
+    async def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> Optional[List[VectorStoreResult]]:
+        stmt = self._build_sql_list(filters, top_k)
+        async with self._session() as session:
+            result = await session.execute(stmt)
+            rows = result.fetchall()
+
+        results: List[VectorStoreResult] = []
+        for row in rows:
+            row_dict = row._asdict()
+            results.append(self._parse(row_dict))
+        return results

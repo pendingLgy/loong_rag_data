@@ -82,7 +82,7 @@ class VectorStoreBase(ABC):
         """批量写入向量及其元数据；ids 缺省时由实现自行生成。"""
 
     @abstractmethod
-    def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[VectorStoreResult]:
+    def search(self, query: str, vectors: List[float], top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
         """按相似度检索，返回按 score 降序的结果。"""
 
     @abstractmethod
@@ -98,7 +98,7 @@ class VectorStoreBase(ABC):
         """按 id 读取单条，不存在返回 None。"""
 
     @abstractmethod
-    def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> List[List[VectorStoreResult]]:
+    def list(self, filters: Optional[Dict[str, Any]] = None, top_k: Optional[int] = None) -> Optional[List[VectorStoreResult]]:
         """列出集合内容（外层列表按既有约定包裹一层）。"""
 
     def keyword_search(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> Optional[List[VectorStoreResult]]:
