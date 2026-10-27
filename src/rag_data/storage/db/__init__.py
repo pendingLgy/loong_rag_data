@@ -11,7 +11,7 @@ from rag_data.storage.db.registry_db import (
 )
 from rag_data.storage.db.db_engine import build_database
 from rag_data.storage.db.schema import  HistoryRecord, Message
-from rag_data.storage.db.snowflake import SnowflakeGenerator, next_id
+from rag_data.util.snowflake import SnowflakeGenerator, next_id
 
 __all__ = [
     "BaseDB",

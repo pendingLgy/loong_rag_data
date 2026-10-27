@@ -193,6 +193,18 @@ class VectorSettings(BaseModel):
     pg: PGVectorSettings = Field(default_factory=PGVectorSettings)
 
 
+class DBPoolSettings(BaseModel):
+    """数据库连接池"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    print_sql: bool = Field(default=False)
+    pool_size: int = Field(default=5, gt=0)
+    max_overflow: int = Field(default=10, gt=0)
+    pool_timeout: int = Field(default=5, gt=0)
+    pool_recycle: int = Field(default=1800, gt=0)
+    pool_pre_ping: bool = Field(default=False)
+
 class DBSettings(BaseModel):
     """数据库分区：按 sqlite、mysql、pg 分别承载连接参数。"""
 
@@ -210,6 +222,10 @@ class DBSettings(BaseModel):
     sqlite: SQLiteSettings = Field(default_factory=SQLiteSettings)
     mysql: MySQLSettings = Field(default_factory=MySQLSettings)
     pg: PGSettings = Field(default_factory=PGSettings)
+
+    table_prefix: str = Field(default="")
+
+    pool_config: DBPoolSettings = Field(default_factory=DBPoolSettings)
 
 
 class _MemoryEnvSource(PydanticBaseSettingsSource):

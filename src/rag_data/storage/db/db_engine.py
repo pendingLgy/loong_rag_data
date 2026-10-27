@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from abc import abstractmethod
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone
@@ -17,7 +16,7 @@ from sqlalchemy.orm import Session
 from rag_data.exceptions import ConfigError, StorageError
 from rag_data.storage.db.base import BaseDB
 from rag_data.storage.db.schema import HistoryRecord, Message, get_history_table, get_messages_table
-from rag_data.storage.db.snowflake import next_id
+from rag_data.util.snowflake import next_id
 
 logger = logging.getLogger(__name__)
 
@@ -332,75 +331,56 @@ class AsyncDBEngine(DBEngine):
 # 按配置装配数据库实例：按 backend 选择方言，参数取自对应方言分区。
 # 方言实现按需惰性导入，避免与本模块形成导入环。
 def build_database(settings: "DBSettings") -> BaseDB:
-    """按 DBSettings.backend 构造对应方言的实例；异步后端的实例需调用方 await _start() 启动。
-        Remove on future
-    """
-
-    warnings.warn(
-        "build_database() 已废弃，将在后续版本中移除，请使用新的数据库初始化逻辑。",
-        DeprecationWarning,
-        stacklevel=2
-    )
+    """ 按 DBSettings.backend 构造对应方言的实例；异步后端的实例需调用方 await _start() 启动。"""
 
     backend = settings.backend
-    sqlite = settings.sqlite
-    mysql = settings.mysql
-    pg = settings.pg
+    pool = settings.pool_config
 
-    if backend == "sqlite":
-        from rag_data.storage.db.sqlite_db import SQLiteDB
+    # 1. 提取所有后端通用的连接池与表前缀配置，消除冗余
+    common_kwargs = {
+        "print_sql": pool.print_sql,
+        "pool_size": pool.pool_size,
+        "max_overflow": pool.max_overflow,
+        "pool_timeout": pool.pool_timeout,
+        "pool_recycle": pool.pool_recycle,
+        "pool_pre_ping": pool.pool_pre_ping,
+        "table_prefix": settings.table_prefix,
+    }
 
-        return SQLiteDB(db_path=_sqlite_path(sqlite))
-    if backend == "mysql":
-        from rag_data.storage.db.mysql_db import MySQLDB
+    # 2. SQLite 后端（合并同步与异步）
+    if backend in ("sqlite", "sqlite_async"):
+        from rag_data.storage.db.sqlite_db import SQLiteDB, AsyncSQLiteDB
+        db_cls = AsyncSQLiteDB if backend.endswith("_async") else SQLiteDB
+        return db_cls(db_path=_sqlite_path(settings.sqlite), **common_kwargs)
 
-        return MySQLDB(
+    # 3. MySQL 后端（合并同步与异步）
+    if backend in ("mysql", "mysql_async"):
+        from rag_data.storage.db.mysql_db import MySQLDB, AsyncMySQLDB
+        mysql = settings.mysql
+        db_cls = AsyncMySQLDB if backend.endswith("_async") else MySQLDB
+        return db_cls(
             host=mysql.host,
             port=mysql.port,
             user=mysql.user,
             password=mysql.password,
             database=mysql.database,
             charset=mysql.charset,
+            **common_kwargs,
         )
-    if backend == "pg":
-        from rag_data.storage.db.pg_db import PGDB
 
-        return PGDB(
+    # 4. PostgreSQL 后端（合并同步与异步）
+    if backend in ("pg", "pg_async"):
+        from rag_data.storage.db.pg_db import PGDB, AsyncPGDB
+        pg = settings.pg
+        db_cls = AsyncPGDB if backend.endswith("_async") else PGDB
+        return db_cls(
             connection_string=pg.connection_string or None,
             host=pg.host,
             port=pg.port,
             user=pg.user,
             password=pg.password,
             database=pg.database,
-        )
-
-    # ---------------- 异步后端：名字加 _async 后缀 ----------------
-
-    if backend == "sqlite_async":
-        from rag_data.storage.db.sqlite_db import AsyncSQLiteDB
-
-        return AsyncSQLiteDB(db_path=_sqlite_path(sqlite))
-    if backend == "mysql_async":
-        from rag_data.storage.db.mysql_db import AsyncMySQLDB
-
-        return AsyncMySQLDB(
-            host=mysql.host,
-            port=mysql.port,
-            user=mysql.user,
-            password=mysql.password,
-            database=mysql.database,
-            charset=mysql.charset,
-        )
-    if backend == "pg_async":
-        from rag_data.storage.db.pg_db import AsyncPGDB
-
-        return AsyncPGDB(
-            connection_string=pg.connection_string or None,
-            host=pg.host,
-            port=pg.port,
-            user=pg.user,
-            password=pg.password,
-            database=pg.database,
+            **common_kwargs,
         )
 
     raise ConfigError("不支持的数据库后端：" + str(backend))

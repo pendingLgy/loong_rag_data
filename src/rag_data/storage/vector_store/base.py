@@ -13,8 +13,6 @@ from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from rag_data.exceptions import StorageError
-from rag_data.storage.guard import ensure_test_table
 from rag_data.storage.vector_store.registry_vector import register_vector_store
 
 # 支持的向量度量类型。
