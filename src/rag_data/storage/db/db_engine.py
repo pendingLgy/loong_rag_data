@@ -218,6 +218,7 @@ class AsyncDBEngine(DBEngine):
         self.METADATA = MetaData()
         self.history_table = get_history_table(self.METADATA, table_prefix)
         self.messages_table = get_messages_table(self.METADATA, table_prefix)
+        super().__init__()
 
     async def _init_db(self, engine, asyncSessionLocal):
         self.engine = engine

@@ -5,11 +5,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, List, Optional
 
 from sqlalchemy import Engine
 
-from rag_data.exceptions import StorageError
 from rag_data.storage.db.registry_db import register_db
 from rag_data.storage.db.schema import HistoryRecord, Message
 
@@ -53,5 +52,3 @@ class BaseDB(ABC):
     @abstractmethod
     def get_last_messages(self, session_scope: str, limit: int = 10) -> List[Message]:
         """按时间升序取会话最近 limit 条消息。"""
-
-
