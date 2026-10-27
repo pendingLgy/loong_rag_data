@@ -78,7 +78,7 @@ MYSQL_JSON = r"""
 
 SQLITE_JSON = r"""
 {
-  "path": "F:\\workspace\\code\\python\\rag-data\\memory.db"
+  "path": "F:\\workspace\\code\\python\\rag-data\\"
 }
 """
 

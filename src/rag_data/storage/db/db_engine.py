@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import abstractmethod
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone
@@ -175,7 +176,7 @@ class DBEngine(BaseDB):
                 table.c.content, table.c.name, table.c.created_at_tz,
             )
             .where(table.c.session_scope == session_scope)
-            .order_by(table.c.created_at_tz.desc(), table.c.id.desc())
+            .order_by(table.c.id.desc())
             .limit(limit)
             .subquery()
         )
@@ -331,7 +332,16 @@ class AsyncDBEngine(DBEngine):
 # 按配置装配数据库实例：按 backend 选择方言，参数取自对应方言分区。
 # 方言实现按需惰性导入，避免与本模块形成导入环。
 def build_database(settings: "DBSettings") -> BaseDB:
-    """按 DBSettings.backend 构造对应方言的实例；异步后端的实例需调用方 await _start() 启动。"""
+    """按 DBSettings.backend 构造对应方言的实例；异步后端的实例需调用方 await _start() 启动。
+        Remove on future
+    """
+
+    warnings.warn(
+        "build_database() 已废弃，将在后续版本中移除，请使用新的数据库初始化逻辑。",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     backend = settings.backend
     sqlite = settings.sqlite
     mysql = settings.mysql
