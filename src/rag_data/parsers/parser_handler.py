@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
-from rag_data.exceptions import ParseError
+from rag_data.core.exceptions import ParseError
 from rag_data.parsers.base import DocumentParser
 from rag_data.parsers.registry_parser import parser_classes
 

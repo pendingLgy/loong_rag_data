@@ -10,7 +10,7 @@ import openai
 from openai import OpenAI
 
 from rag_data.embedding.base import BaseEmbedder
-from rag_data.exceptions import EmbeddingError
+from rag_data.core.exceptions import EmbeddingError
 
 
 class OpenAIEmbedder(BaseEmbedder):

@@ -4,7 +4,6 @@
 #
 #   from rag_data.parsers import parse_document, chunk_document, resolve_parser
 
-from rag_data.nlp.spacy import DEFAULT_MODEL, clear_cache, load_nlp
 from rag_data.parsers.base import DocumentParser
 from rag_data.parsers.parser_handler import PARSER_CLASSES, ParserHandler
 from rag_data.parsers.registry_parser import (
@@ -24,9 +23,6 @@ chunk_document = _handler.chunk_document
 
 __all__ = [
     "DocumentParser",
-    "DEFAULT_MODEL",
-    "load_nlp",
-    "clear_cache",
     "ParserHandler",
     "PARSER_CLASSES",
     "resolve_parser",

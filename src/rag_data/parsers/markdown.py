@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from rag_data.exceptions import ParserDependencyError
+from rag_data.core.exceptions import ParserDependencyError
 from rag_data.parsers.base import DocumentParser
 
 CHUNK_INSTALL_HINT = "pip install -e '.[parsers]'"

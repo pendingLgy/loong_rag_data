@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
 
 # 起始纪元（2024-01-01 00:00:00 UTC，毫秒）。
 EPOCH_MS = 1704067200000

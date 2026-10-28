@@ -7,7 +7,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, List, Mapping, Type, Union
 
-from rag_data.exceptions import ConfigError
+from rag_data.core.exceptions import ConfigError
 
 # 注册值：点分路径字符串或类本身。
 Ref = Union[str, type]

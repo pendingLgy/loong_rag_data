@@ -91,6 +91,7 @@ def clear_cache() -> None:
     """清空句柄缓存（含失败记录），供测试或运行时重建句柄使用。"""
     with _lock:  # 【建议】清空缓存时也加上锁，确保多线程安全
         _PIPELINES.clear()
+        _PIPELINES_LEMMA.clear()
 
 
 def ensure_sentence_boundaries(nlp: Any) -> None:

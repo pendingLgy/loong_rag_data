@@ -2,9 +2,8 @@
 
 import pytest
 
-from rag_data.exceptions import ParseError
+from rag_data.core.exceptions import ParseError
 from rag_data.parsers import (
-    PARSER_CLASSES,
     chunk_document,
     resolve_parser,
 )

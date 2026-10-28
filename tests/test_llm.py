@@ -5,8 +5,8 @@
 
 import pytest
 
-from rag_data.config import LLMSettings, RagSetting
-from rag_data.exceptions import ConfigError, LLMError
+from rag_data.core.config import LLMSettings
+from rag_data.core.exceptions import ConfigError, LLMError
 from rag_data.llm import (
     BUILTIN_PROVIDERS,
     LLMHandler,
@@ -96,7 +96,7 @@ def test_register_llm_by_class_object():
 
 def test_qwen_overrides_openai_defaults():
     assert issubclass(QwenLLMProvider, OpenAILLMProvider)
-    assert QwenLLMProvider.default_model == 'qwen-plus'
+    assert QwenLLMProvider.default_model == 'qwen3.7-flash'
     assert QwenLLMProvider.api_key_env == 'DASHSCOPE_API_KEY'
     assert 'compatible-mode' in QwenLLMProvider.default_base_url
 
@@ -115,7 +115,7 @@ def test_openai_defaults():
 
 def test_model_falls_back_to_default():
     provider = QwenLLMProvider(LLMSettings())
-    assert provider.model == 'qwen-plus'
+    assert provider.model == 'qwen3.7-flash'
     assert provider.base_url == QwenLLMProvider.default_base_url
 
 

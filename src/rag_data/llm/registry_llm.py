@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Type
 
-from rag_data.registry import Ref, Registry
+from rag_data.core.registry import Ref, Registry
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import LLMSettings
     from rag_data.llm.base import BaseLLMProvider
 
 # 内置 provider 名称到类路径的映射，按需惰性导入。

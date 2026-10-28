@@ -6,11 +6,11 @@ import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
-from rag_data.exceptions import LLMError
+from rag_data.core.exceptions import LLMError
 from rag_data.llm.registry_llm import register_llm
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import LLMSettings
+    from rag_data.core.config import LLMSettings
 
 
 class BaseLLMProvider(ABC):

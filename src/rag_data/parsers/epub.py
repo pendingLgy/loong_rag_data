@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Tuple
 
-from rag_data.exceptions import ParseError, ParserDependencyError
-from rag_data.nlp.spacy import DEFAULT_MODEL, load_nlp
+from rag_data.core.exceptions import ParseError, ParserDependencyError
+from rag_data.nlp.spacy import load_nlp
 from rag_data.parsers.base import DocumentParser
 
 logger = logging.getLogger(__name__)

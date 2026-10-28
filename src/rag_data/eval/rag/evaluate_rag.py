@@ -1,22 +1,30 @@
 import asyncio
+import logging
 import os
 import sys
 import threading
 from pathlib import Path
 from typing import Dict, Any
 
-import pandas as pd
 from datasets import Dataset
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI
 from pymilvus import AsyncMilvusClient
 from ragas import aevaluate, RunConfig
-from ragas.llms import llm_factory, LangchainLLMWrapper
-from ragas.metrics._context_precision import ContextPrecision, context_precision
-from ragas.metrics._context_recall import ContextRecall, context_recall
-from ragas.metrics._faithfulness import Faithfulness, faithfulness
+from ragas.llms import LangchainLLMWrapper
+from ragas.metrics._context_precision import context_precision
+from ragas.metrics._context_recall import context_recall
+from ragas.metrics._faithfulness import faithfulness
 from ragas.metrics._nv_metrics import AnswerAccuracy
+
+logger = logging.getLogger(__name__)
+
+try:
+    import pandas as pd
+except Exception as e:
+    logger.warning(f"{__file__} 缺少依赖:str{e}")
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 env_file = BASE_DIR / ".env_rag_eval"
@@ -207,7 +215,6 @@ async def main():
     # 如果你使用的是阿里云百炼等兼容 OpenAI 的接口，建议在 .env 中也将 API Key 同步赋值给 OPENAI_API_KEY/OPENAI_API_BASE，
     # 或者通过 Ragas 的 llm 配置项显式传入。
 
-
     client = ChatOpenAI(
         model=LLM_MODEL,
         api_key=LLM_API_KEY,
@@ -221,12 +228,12 @@ async def main():
         exception_types=(Exception,)
     )
 
-    context_precision.llm = LangchainLLMWrapper(langchain_llm=client,run_config=run_config)
-    context_recall.llm = LangchainLLMWrapper(langchain_llm=client,run_config=run_config)
-    faithfulness.llm = LangchainLLMWrapper(langchain_llm=client,run_config=run_config)
+    context_precision.llm = LangchainLLMWrapper(langchain_llm=client, run_config=run_config)
+    context_recall.llm = LangchainLLMWrapper(langchain_llm=client, run_config=run_config)
+    faithfulness.llm = LangchainLLMWrapper(langchain_llm=client, run_config=run_config)
 
     answer_accuracy = AnswerAccuracy()
-    answer_accuracy.llm = LangchainLLMWrapper(langchain_llm=client,run_config=run_config)
+    answer_accuracy.llm = LangchainLLMWrapper(langchain_llm=client, run_config=run_config)
 
     result = await aevaluate(
         dataset=eval_dataset,

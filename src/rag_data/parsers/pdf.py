@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from rag_data.exceptions import ParseError, ParserDependencyError
+from rag_data.core.exceptions import ParseError, ParserDependencyError
 from rag_data.parsers.base import DocumentParser
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import openai
 from openai import OpenAI
 
-from rag_data.exceptions import LLMError
+from rag_data.core.exceptions import LLMError
 from rag_data.llm.base import BaseLLMProvider
 
 

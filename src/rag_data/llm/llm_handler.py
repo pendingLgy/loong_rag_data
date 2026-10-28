@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from rag_data.config import LLMSettings
+from rag_data.core.config import LLMSettings
 from rag_data.llm.registry_llm import resolve_llm_provider
 
 logger = logging.getLogger(__name__)

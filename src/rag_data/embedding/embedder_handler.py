@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional
 
-from rag_data.config import EmbeddingSettings
+from rag_data.core.config import EmbeddingSettings
 from rag_data.embedding.registry_embedder import resolve_embedder
-from rag_data.exceptions import EmbeddingError
+from rag_data.core.exceptions import EmbeddingError
 
 logger = logging.getLogger(__name__)
 

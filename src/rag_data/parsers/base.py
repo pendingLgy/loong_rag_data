@@ -9,7 +9,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, FrozenSet, List, Optional
 
-from rag_data.nlp.spacy import DEFAULT_MODEL, clear_cache, load_nlp
 from rag_data.parsers.registry_parser import register_parser
 
 

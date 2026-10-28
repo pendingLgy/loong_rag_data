@@ -36,24 +36,7 @@ parsers = [
   "zh_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_sm-3.8.0/zh_core_web_sm-3.8.0-py3-none-any.whl",
   "zh_core_web_md @ https://github.com/explosion/spacy-models/releases/download/zh_core_web_md-3.8.0/zh_core_web_md-3.8.0-py3-none-any.whl",
 ]
-embedding = ["sentence-transformers>=2.5"]
 milvus = ["pymilvus>=2.3"]
-sqlalchemy = [
-  "SQLAlchemy>=2.0",
-  "greenlet>=3.5.6",
-  "aiosqlite>=0.19",
-]
-
-pg = [
-  "psycopg[binary]>=3.1",
-  "pgvector>=0.5.1",
-  "asyncpg>=0.32.0"
-]
-mysql = [
-  "pymysql>=1.1",
-  "aiomysql>=0.3.2"
-]
-
 epub = [
   "EbookLib>=0.20",
   "beautifulsoup4>=4.15.0"
@@ -64,16 +47,16 @@ pdf = [
 word = [
   "python-docx>=1.0"
 ]
-openai = ["openai==3.26.0"]
 
-ragas = [
+openai = ["openai>=3.26.0"]
+
+ragas-eval = [
   "langchain-core>=1.7.0",
   "langchain-openai>=1.7.2",
   "langchain-google-community>=5.1.1",
   "langchain-community==0.4.1",
   "ragas>=0.4.3",
 ]
-
 dev = [
   "pytest>=7.4",
   "pytest-asyncio>=1.4.0",
@@ -91,8 +74,7 @@ Source = "https://github.com/pendingLgy/loong_rag_data"
 installer = "pip"
 features = [
   "parsers",
-  "embedding",
-  "epub",
+  "openai",
   "dev",
 ]
 
@@ -107,17 +89,12 @@ format = "ruff format src tests"
 installer = "pip"
 features = [
   "parsers",
-  "embedding",
-  "sqlalchemy",
-  "pg",
-  "mysql",
   "milvus",
   "dev",
   "word",
   "pdf",
   "epub",
-  "openai",
-  "ragas",
+  "ragas-eval",
 ]
 
 [tool.hatch.envs.rag_data_dev.scripts]

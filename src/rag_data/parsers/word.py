@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Any, List
 
-from rag_data.exceptions import ParseError, ParserDependencyError
+from rag_data.core.exceptions import ParseError, ParserDependencyError
 from rag_data.parsers.base import DocumentParser
 
 logger = logging.getLogger(__name__)

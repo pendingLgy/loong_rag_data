@@ -1,27 +1,33 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
 
-import pandas as pd
+from rag_data.rag_engine import _build_llm, _build_embedder
+
+logger = logging.getLogger(__name__)
+
+try:
+    import pandas as pd
+    from pymilvus import AsyncMilvusClient
+except Exception as e:
+    logger.warning(f"{__file__} 缺少依赖:str{e}")
+
 from dotenv import load_dotenv
 from openai import BadRequestError
-from pymilvus import AsyncMilvusClient
 
-from rag_data.config import (
+from rag_data.core.config import (
     EmbeddingSettings,
-    MilvusSettings,
-    PGVectorSettings,
     LLMSettings,
 )
 from rag_data.embedding import BaseEmbedder
-from rag_data.facade import _build_embedder, _build_llm
 from rag_data.llm import BaseLLMProvider
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-env_file = BASE_DIR / ".env_ai_key"
+env_file = BASE_DIR / ".env_rag_eval"
 
 # 显式加载自定义文件名的环境变量
 if env_file.exists():
@@ -44,23 +50,10 @@ RAG_EVAL_JSON = r"""
   "embedding": {
     "enable": true,
     "provider": "qwen",
-    "model": "qwen3.7-text-embedding",
+    "model": "qwen3.7-flash",
     "dim": 1024,
     "api_key": "",
     "batch_size": 10
-  },
-  "milvus": {
-    "uri": "http://127.0.0.1:19530",
-    "token": "root:Milvus",
-    "db_name": "eval_rag_data"
-  },
-  "pg": {
-    "connection_string": "",
-    "host": "localhost",
-    "port": 5432,
-    "user": "root",
-    "password": "123456",
-    "database": "eval_rag_data"
   },
   "vector": {
     "max_chunks": 8,
@@ -71,28 +64,22 @@ RAG_EVAL_JSON = r"""
 
 RAG_EVAL_CONFIG = json.loads(RAG_EVAL_JSON)
 
-# 下方四个 Settings 与两个字典供用例正文引用，字段由上方 JSON 推导。
 EMBEDDING_SETTINGS = EmbeddingSettings(**RAG_EVAL_CONFIG["embedding"])
 EMBEDDING_SETTINGS.api_key = os.getenv("embedding_api_key", "")
 
 LLM_SETTINGS = LLMSettings(**RAG_EVAL_CONFIG["llm"])
 LLM_SETTINGS.api_key = os.getenv("llm_api_key", "")
 
-MILVUS_SETTINGS = MilvusSettings(**RAG_EVAL_CONFIG["milvus"])
-PG_VECTOR_SETTINGS = PGVectorSettings(**RAG_EVAL_CONFIG["pg"])
-
 COLLECTION = "eval_rag_data"
 
 # 向量维度一律取嵌入配置，避免与 vector.dim 的占位值不一致。
 DIM = EMBEDDING_SETTINGS.dim
 
-# PG 连接参数。
-PG_CONNECTION_STRING = PG_VECTOR_SETTINGS.connection_string
-PG_HOST = PG_VECTOR_SETTINGS.host
-PG_PORT = PG_VECTOR_SETTINGS.port
-PG_USER = PG_VECTOR_SETTINGS.user
-PG_PASSWORD = PG_VECTOR_SETTINGS.password
-PG_DB = PG_VECTOR_SETTINGS.database
+MILVUS_URI = os.getenv("milvus_url","http://127.0.0.1:19530")
+MILVUS_DB =  os.getenv("db_name","eval_rag_data")
+MILVUS_TOKEN = os.getenv("db_token","")
+MILVUS_USERNAME = os.getenv("db_username","")
+MILVUS_PASSWORD =os.getenv("db_password","")
 
 
 def _connect_milvus() -> AsyncMilvusClient:
@@ -102,11 +89,15 @@ def _connect_milvus() -> AsyncMilvusClient:
     except ImportError as exc:
         raise exc
 
-    kwargs: Dict[str, Any] = {"uri": MILVUS_SETTINGS.uri}
-    if MILVUS_SETTINGS.token:
-        kwargs["token"] = MILVUS_SETTINGS.token
-    if MILVUS_SETTINGS.db_name:
-        kwargs["db_name"] = MILVUS_SETTINGS.db_name
+    kwargs: Dict[str, Any] = {"uri": MILVUS_URI}
+    if MILVUS_TOKEN:
+        kwargs["token"] = MILVUS_TOKEN
+    if MILVUS_DB:
+        kwargs["db_name"] = MILVUS_DB
+    if MILVUS_USERNAME:
+        kwargs["user"] = MILVUS_USERNAME
+    if MILVUS_PASSWORD:
+        kwargs["password"] = MILVUS_PASSWORD
     try:
         return pymilvus.AsyncMilvusClient(**kwargs)
     except Exception as exc:  # noqa: BLE001 连接失败统一按环境问题跳过
@@ -128,7 +119,7 @@ async def safe_generate_testset(generator, chunks, batch_size=5, testset_size_pe
 
     # 将长切片列表切分为每组 batch_size 个的小批次
     for i in range(0, len(chunks), batch_size):
-        batch_chunks = chunks[i : i + batch_size]
+        batch_chunks = chunks[i: i + batch_size]
         batch_num = i // batch_size + 1
 
         try:
@@ -156,13 +147,12 @@ async def safe_generate_testset(generator, chunks, batch_size=5, testset_size_pe
         print("\n[错误] 没有成功生成任何测试集数据。")
         return None
 
-async def build_chunk_rag_test_docs():
 
+async def build_chunk_rag_test_docs():
     from langchain_core.documents import Document
     from ragas.testset import TestsetGenerator
     from langchain_openai import ChatOpenAI, OpenAIEmbeddings
     from ragas.run_config import RunConfig
-
 
     llm_handler = _build_llm(LLM_SETTINGS)
     embedder_handler = _build_embedder(EMBEDDING_SETTINGS)
@@ -244,6 +234,7 @@ async def build_chunk_rag_test_docs():
 async def main():
     print("=== 开始在独立线程中执行 Ragas 测试集生成 ===")
     await build_chunk_rag_test_docs()
+
 
 if __name__ == "__main__":
     """r

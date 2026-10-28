@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Type
 
-from rag_data.registry import Ref, Registry
+from rag_data.core.registry import Ref, Registry
 
 if TYPE_CHECKING:  # pragma: no cover
     from rag_data.parsers.base import DocumentParser

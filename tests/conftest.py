@@ -8,9 +8,9 @@
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 from dotenv import load_dotenv
 
 # 获取项目根目录（假设 conftest.py 在 tests 目录下，往上找一层是根目录）
@@ -31,19 +31,12 @@ _TESTS = os.path.dirname(os.path.abspath(__file__))
 for _path in (_SRC, _TESTS):
     if _path not in sys.path: sys.path.insert(0, _path)
 
-from rag_data.config import (  # noqa: E402
+from rag_data.core.config import (  # noqa: E402
     EmbeddingSettings,
     LLMSettings,
-    MilvusSettings,
-    MySQLSettings,
-    PGSettings,
-    PGVectorSettings,
     ParsingSettings,
     RagSetting,
-    SQLiteSettings,
-    VectorSettings,
 )
-
 
 # ---------------- 各分区 JSON 文本 ----------------
 
@@ -106,7 +99,7 @@ LLM_JSON = r"""
 {
   "enable": true,
   "provider": "qwen",
-  "model": "qwen-plus",
+  "model": "qwen3.7-flash",
   "temperature": 0.0
 }
 """
@@ -155,7 +148,6 @@ CASES_JSON = r"""
 }
 """
 
-
 # ---------------- 各分区配置字典 ----------------
 
 MILVUS_CONFIG = json.loads(MILVUS_JSON)
@@ -169,7 +161,6 @@ PARSING_CONFIG = json.loads(PARSING_JSON)
 SAMPLES_CONFIG = json.loads(SAMPLES_JSON)
 CASES_CONFIG = json.loads(CASES_JSON)
 
-
 # ---------------- 各分区设置对象 ----------------
 #
 # JSON 中每个分区在此一次性实例化为配置模型，用例直接读属性，不再逐字段取值与转换；
@@ -178,25 +169,9 @@ CASES_CONFIG = json.loads(CASES_JSON)
 
 PARSING_SETTINGS = ParsingSettings(**PARSING_CONFIG)
 EMBEDDING_SETTINGS = EmbeddingSettings(**EMBEDDING_CONFIG)
-EMBEDDING_SETTINGS.api_key = os.getenv("embedding_api_key","")
+EMBEDDING_SETTINGS.api_key = os.getenv("embedding_api_key", "")
 
 LLM_SETTINGS = LLMSettings(**LLM_CONFIG)
-SQLITE_SETTINGS = SQLiteSettings(**SQLITE_CONFIG)
-MYSQL_SETTINGS = MySQLSettings(**MYSQL_CONFIG)
-PG_SETTINGS = PGSettings(**PG_CONFIG)
-MILVUS_SETTINGS = MilvusSettings(**MILVUS_CONFIG)
-PG_VECTOR_SETTINGS = PGVectorSettings(**PG_CONFIG)
-
-# 向量库聚合设置：JSON 的 vector.dim 对应 VectorSettings.vector_size；
-# backend 取单后端用例组的后端，因为 vector.backend 允许 both（仅供向量库用例遍历后端），
-# 不是该字段的合法取值。collection 由各用例自行覆盖。
-
-VECTOR_SETTINGS = VectorSettings(
-    backend=CASES_CONFIG["facade_memory"]["backend"].lower(),
-    vector_size=VECTOR_CONFIG["dim"],
-    milvus=MILVUS_SETTINGS,
-    pg=PG_VECTOR_SETTINGS,
-)
 
 
 @pytest.fixture()
@@ -210,10 +185,4 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="运行真实调用外部服务的集成测试",
-    )
-    parser.addoption(
-        "--eval",
-        action="store_true",
-        default=False,
-        help="评分用例：真实调用 Milvus 与 PG 完成写入与回查",
     )

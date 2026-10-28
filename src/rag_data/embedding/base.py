@@ -7,10 +7,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, List, Optional
 
 from rag_data.embedding.registry_embedder import register_embedder
-from rag_data.exceptions import EmbeddingError
+from rag_data.core.exceptions import EmbeddingError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from rag_data.config import EmbeddingSettings
+    from rag_data.core.config import EmbeddingSettings
 
 
 class BaseEmbedder(ABC):

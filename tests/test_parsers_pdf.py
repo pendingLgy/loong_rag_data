@@ -10,8 +10,9 @@ import pytest
 
 from conftest import SAMPLES_CONFIG
 
-from rag_data.exceptions import ParseError, ParserDependencyError
-from rag_data.parsers.base import DocumentParser, load_nlp, DEFAULT_MODEL
+from rag_data.core.exceptions import ParserDependencyError
+from rag_data.parsers.base import DocumentParser
+from rag_data.nlp import  load_nlp, DEFAULT_MODEL
 from rag_data.parsers.pdf import PdfParser
 
 

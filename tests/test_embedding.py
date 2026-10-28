@@ -4,7 +4,7 @@
 
 import pytest
 
-from rag_data.config import EmbeddingSettings
+from rag_data.core.config import EmbeddingSettings
 from rag_data.embedding import (
     BUILTIN_EMBEDDERS,
     BaseEmbedder,
@@ -17,7 +17,7 @@ from rag_data.embedding import (
     register_embedder_provider,
     resolve_embedder,
 )
-from rag_data.exceptions import ConfigError, EmbeddingError
+from rag_data.core.exceptions import ConfigError, EmbeddingError
 
 
 # ---------------- 测试替身 ----------------
